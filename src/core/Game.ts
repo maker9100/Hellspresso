@@ -13,6 +13,7 @@ import { SettingsStore } from '../ui/Settings';
 import { FixedStepLoop } from './FixedStepLoop';
 import { GameStateMachine } from './GameStateMachine';
 import type { GameState } from './GameStateMachine';
+import { ArenaCombat } from './ArenaCombat';
 import { Input } from './Input';
 import { TouchControls } from '../ui/TouchControls';
 import { PointerLock } from './PointerLock';
@@ -35,6 +36,9 @@ export class Game {
   private readonly pointer:PointerLock;
   private readonly loop:FixedStepLoop;
   private readonly touch:TouchControls;
+  private readonly combat:ArenaCombat;
+  private attack=false;
+  private extract=false;
   private readonly touchMode=matchMedia('(pointer: coarse)').matches;
   private resources=new ResourceSystem();
   private movement=new Movement(this.collision,this.arena.spawn);
@@ -68,13 +72,25 @@ export class Game {
       else if(!locked && this.machine.current==='PLAYING')this.change('PAUSED');
     },message=>this.hud.toast(message));
     this.input=new Input(()=>this.settings.value,()=>this.pointer.locked && this.machine.current==='PLAYING');
+    this.combat=new ArenaCombat(this.scene,this.collision,message=>this.hud.toast(message));
+    this.renderer.domElement.addEventListener('pointerdown',event=>{
+      if(event.button===0 && this.pointer.locked && this.machine.current==='PLAYING')this.attack=true;
+    },{signal:this.events.signal});
     this.touch=new TouchControls(parent,action=>{
       if(this.machine.current!=='PLAYING')return;
+      if(action==='attack'){this.attack=true;return;}
+      if(action==='extract'){this.extract=true;return;}
       this.change(action==='pause'?'PAUSED':'INVENTORY');
     });
     this.menu=new Menu(parent,this.settings,{start:()=>this.start(),resume:()=>this.resume(),menu:()=>this.change('MENU'),changed:()=>this.applySettings(),toast:message=>this.hud.toast(message)});
     this.loop=new FixedStepLoop(dt=>this.update(dt),delta=>this.render(delta));
     document.addEventListener('keydown',this.keydown,{signal:this.events.signal});
+    const preventBrowserGesture = (event:Event):void => {
+      if(this.machine.current==='PLAYING')event.preventDefault();
+    };
+    for(const type of ['selectstart','contextmenu','gesturestart','gesturechange','gestureend']){
+      parent.addEventListener(type,preventBrowserGesture,{capture:true,passive:false,signal:this.events.signal});
+    }
     window.addEventListener('resize',()=>this.resize(),{signal:this.events.signal});
     window.addEventListener('blur',()=>{if(TUNABLES.focus.pauseOnBlur)this.pause();},{signal:this.events.signal});
     window.addEventListener('pagehide',()=>this.pause(),{signal:this.events.signal});
@@ -91,8 +107,10 @@ export class Game {
   private start():void{
     this.change('LOADING');
     this.resources=new ResourceSystem();this.movement=new Movement(this.collision,this.arena.spawn);
+    this.combat.reset();
     this.elapsed=0;this.caffeineSpent=0;this.yaw=0;this.pitch=0;this.loop.reset();
     this.change('PAUSED');this.resume();
+    this.hud.toast('악마를 커터칼로 처치하고 정수를 추출하세요.');
   }
 
   private resume():void{
@@ -105,8 +123,10 @@ export class Game {
     this.loop?.setRunning(false);
     if(this.machine.current==='DEAD' && next!=='MENU')return;
     this.machine.transition(next);
+    if(next==='MENU')this.combat.reset();
     this.loop?.stepper.setRunning(this.machine.simulating);
     this.input?.clear();
+    this.attack=false;this.extract=false;
     this.parent.dataset['state']=next;
     this.touch?.show(this.touchMode && next==='PLAYING');
     this.menu?.show(next,this.resources.cause);
@@ -124,7 +144,7 @@ export class Game {
       if(this.machine.current==='PLAYING')this.change('INVENTORY');
       else this.resume();
     }else if(event.code===RULES.quickHealKey){this.hud.toast('회복 아이템이 없다.');}
-    else if(this.input.matches('extractor',event.code)){this.hud.toast('추출할 재료가 없다.');}
+    else if(this.input.matches('extractor',event.code)){this.extract=this.machine.current==='PLAYING';}
   };
 
   private update(dt:number):void{
@@ -136,6 +156,10 @@ export class Game {
     const before=this.resources.current.caffeine;
     this.resources.advance(dt,false);
     this.caffeineSpent+=before-this.resources.current.caffeine;
+    const playing=this.machine.current==='PLAYING';
+    if(!this.resources.cause)this.combat.update(dt,this.movement.position,this.movement.eyeHeight,
+      this.yaw,this.pitch,playing,this.attack,this.extract,this.resources);
+    this.attack=false;this.extract=false;
     this.elapsed+=dt;this.resolveDeath();
   }
 
@@ -183,7 +207,7 @@ export class Game {
   }
 
   dispose():void{
-    this.events.abort();this.loop.dispose();this.input.dispose();this.pointer.dispose();this.menu.dispose();this.touch.dispose();
+    this.events.abort();this.loop.dispose();this.input.dispose();this.pointer.dispose();this.menu.dispose();this.touch.dispose();this.combat.dispose();
     this.arena.dispose();disposeGroup(this.cutter);this.sun.shadow.map?.dispose();this.renderer.dispose();
     this.parent.replaceChildren();
   }
