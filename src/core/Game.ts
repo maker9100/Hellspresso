@@ -14,6 +14,7 @@ import { FixedStepLoop } from './FixedStepLoop';
 import { GameStateMachine } from './GameStateMachine';
 import type { GameState } from './GameStateMachine';
 import { Input } from './Input';
+import { TouchControls } from '../ui/TouchControls';
 import { PointerLock } from './PointerLock';
 import { NEUTRAL_INTENT } from './types';
 
@@ -33,6 +34,8 @@ export class Game {
   private readonly input:Input;
   private readonly pointer:PointerLock;
   private readonly loop:FixedStepLoop;
+  private readonly touch:TouchControls;
+  private readonly touchMode=matchMedia('(pointer: coarse)').matches;
   private resources=new ResourceSystem();
   private movement=new Movement(this.collision,this.arena.spawn);
   private elapsed=0;
@@ -60,11 +63,16 @@ export class Game {
     this.camera.rotation.order='YXZ';this.camera.add(this.cutter);this.scene.add(this.camera);
     this.hud=new HUD(parent,new URLSearchParams(location.search).get('debug')==='1');
     this.pointer=new PointerLock(this.renderer.domElement,locked=>{
+      if(this.touchMode)return;
       if(locked && (this.machine.current==='PAUSED'||this.machine.current==='INVENTORY'))this.change('PLAYING');
       else if(!locked && this.machine.current==='PLAYING')this.change('PAUSED');
     },message=>this.hud.toast(message));
     this.input=new Input(()=>this.settings.value,()=>this.pointer.locked && this.machine.current==='PLAYING');
-    this.menu=new Menu(parent,this.settings,{start:()=>this.start(),resume:()=>this.pointer.request(),menu:()=>this.change('MENU'),changed:()=>this.applySettings(),toast:message=>this.hud.toast(message)});
+    this.touch=new TouchControls(parent,action=>{
+      if(this.machine.current!=='PLAYING')return;
+      this.change(action==='pause'?'PAUSED':'INVENTORY');
+    });
+    this.menu=new Menu(parent,this.settings,{start:()=>this.start(),resume:()=>this.resume(),menu:()=>this.change('MENU'),changed:()=>this.applySettings(),toast:message=>this.hud.toast(message)});
     this.loop=new FixedStepLoop(dt=>this.update(dt),delta=>this.render(delta));
     document.addEventListener('keydown',this.keydown,{signal:this.events.signal});
     window.addEventListener('resize',()=>this.resize(),{signal:this.events.signal});
@@ -84,7 +92,12 @@ export class Game {
     this.change('LOADING');
     this.resources=new ResourceSystem();this.movement=new Movement(this.collision,this.arena.spawn);
     this.elapsed=0;this.caffeineSpent=0;this.yaw=0;this.pitch=0;this.loop.reset();
-    this.change('PAUSED');this.pointer.request();
+    this.change('PAUSED');this.resume();
+  }
+
+  private resume():void{
+    if(this.touchMode)this.change('PLAYING');
+    else this.pointer.request();
   }
 
   private change(next:GameState):void{
@@ -95,6 +108,7 @@ export class Game {
     this.loop?.stepper.setRunning(this.machine.simulating);
     this.input?.clear();
     this.parent.dataset['state']=next;
+    this.touch?.show(this.touchMode && next==='PLAYING');
     this.menu?.show(next,this.resources.cause);
     if(next!=='PLAYING')this.pointer?.release();
   }
@@ -108,14 +122,17 @@ export class Game {
     if(this.input.matches('inventory',event.code)){
       event.preventDefault();
       if(this.machine.current==='PLAYING')this.change('INVENTORY');
-      else this.pointer.request();
+      else this.resume();
     }else if(event.code===RULES.quickHealKey){this.hud.toast('회복 아이템이 없다.');}
     else if(this.input.matches('extractor',event.code)){this.hud.toast('추출할 재료가 없다.');}
   };
 
   private update(dt:number):void{
     if(this.resources.cause || this.machine.current==='MENU'||this.machine.current==='LOADING'||this.machine.current==='DEAD'||this.machine.current==='ENDING')return;
-    this.movement.update(dt,this.machine.current==='PLAYING'?this.input.intent():NEUTRAL_INTENT,this.yaw,this.resources);
+    const intent=this.machine.current==='PLAYING'
+      ? this.touchMode ? {...NEUTRAL_INTENT,...this.touch.intent()} : this.input.intent()
+      : NEUTRAL_INTENT;
+    this.movement.update(dt,intent,this.yaw,this.resources);
     const before=this.resources.current.caffeine;
     this.resources.advance(dt,false);
     this.caffeineSpent+=before-this.resources.current.caffeine;
@@ -129,13 +146,13 @@ export class Game {
   private resize():void{
     const width=this.parent.clientWidth,height=this.parent.clientHeight;
     this.camera.aspect=width/Math.max(1,height);this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio,TUNABLES.presentation.maxPixelRatio)*this.settings.value.renderScale);
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio,this.touchMode?1:TUNABLES.presentation.maxPixelRatio)*this.settings.value.renderScale);
     this.renderer.setSize(width,height);
   }
 
   private applySettings():void{
     const size=TUNABLES.settings.shadowSizes[this.settings.value.shadows];
-    this.renderer.shadowMap.enabled=size>0;
+    this.renderer.shadowMap.enabled=size>0 && !this.touchMode;
     this.sun.shadow.map?.dispose();this.sun.shadow.map=null;
     this.sun.shadow.mapSize.set(Math.max(1,size),Math.max(1,size));
     this.sun.shadow.needsUpdate=true;this.resize();
@@ -149,7 +166,7 @@ export class Game {
       this.camera.position.set(c.menuCamera[0]+Math.sin(this.displayTime*c.menuDriftSpeed)*c.menuDriftDistance,c.menuCamera[1],c.menuCamera[2]);
       this.camera.lookAt(new Vector3(...c.menuTarget));this.cutter.visible=false;
     }else{
-      const look=this.input.look();
+      const look=this.touchMode?this.touch.look():this.input.look();
       if(this.machine.current==='PLAYING'){
         this.yaw=(this.yaw-look.x*this.settings.value.sensitivity)%(Math.PI*2);
         const limit=TUNABLES.camera.pitchLimitDegrees*Math.PI/180;
@@ -166,7 +183,7 @@ export class Game {
   }
 
   dispose():void{
-    this.events.abort();this.loop.dispose();this.input.dispose();this.pointer.dispose();this.menu.dispose();
+    this.events.abort();this.loop.dispose();this.input.dispose();this.pointer.dispose();this.menu.dispose();this.touch.dispose();
     this.arena.dispose();disposeGroup(this.cutter);this.sun.shadow.map?.dispose();this.renderer.dispose();
     this.parent.replaceChildren();
   }
