@@ -5,7 +5,6 @@ import { RULES } from '../config/rules';
 import { TUNABLES } from '../config/tunables';
 import type { CollisionWorld } from '../physics/CollisionWorld';
 import type { ResourceSystem } from '../player/Resources';
-import { Inventory } from './Inventory';
 import type { Vec3 } from './types';
 
 interface Encounter {
@@ -22,11 +21,11 @@ export class ArenaCombat {
   private nextSpawn = 0;
   private swing = 0;
   private bite = 0;
+  private essence = 0;
   private extraction = 0;
 
   constructor(scene: Scene, private readonly world: CollisionWorld, private readonly toast: (text:string)=>void,
-    private readonly encounter:Encounter={spawn:{x:0,y:0,z:13}},
-    private readonly inventory = new Inventory()) {
+    private readonly encounter:Encounter={spawn:{x:0,y:0,z:13}}) {
     this.walls = world.boxes.map(box => new Box3(new Vector3(box.min.x,box.min.y,box.min.z), new Vector3(box.max.x,box.max.y,box.max.z)));
     this.enemy.visible = false;
     if(encounter.model){
@@ -38,8 +37,7 @@ export class ArenaCombat {
   }
 
   reset(): void {
-    this.nextSpawn = this.swing = this.bite = this.extraction = this.hp = 0;
-    this.inventory.reset();
+    this.nextSpawn = this.swing = this.bite = this.essence = this.extraction = this.hp = 0;
     this.enemy.visible = false;
   }
 
@@ -47,7 +45,7 @@ export class ArenaCombat {
     return Math.sin(Math.PI*Math.min(1,Math.max(0,this.swing)/TUNABLES.weapons.cutter.interval));
   }
 
-  update(dt:number, player:Vec3, eye:number, yaw:number, pitch:number, canExtract:boolean, attack:boolean, extract:boolean, resources:ResourceSystem):void {
+  update(dt:number, player:Vec3, eye:number, yaw:number, pitch:number, playing:boolean, attack:boolean, extract:boolean, resources:ResourceSystem):void {
     const melee = TUNABLES.enemies.melee;
     const cutter = TUNABLES.weapons.cutter;
     this.swing -= dt;
@@ -63,22 +61,13 @@ export class ArenaCombat {
         this.bite = melee.attackInterval;
       }
     }
-    const extractorEquipped = this.inventory.isEquipped('extractor');
-    if (this.extraction > 0 && !extractorEquipped) {
-      this.extraction = 0;
-      this.toast('정수 추출이 취소됐다.');
-    }
-    if (extract && canExtract && this.extraction <= 0) {
-      if (!extractorEquipped) this.toast('정수 추출기를 장착해야 한다.');
-      else if (this.inventory.essence < RULES.extraction.essence.input) this.toast('추출할 정수가 부족하다.');
-      else if (resources.current.caffeine >= RULES.resources.caffeineMax) this.toast('카페인이 가득 찼다.');
-      else {
+    if (extract && this.extraction <= 0) {
+      if (this.essence >= RULES.extraction.essence.input && resources.current.caffeine < RULES.resources.caffeineMax) {
         this.extraction = TUNABLES.extractor.secondsPerUse;
         this.toast('정수 추출 중…');
-      }
+      } else this.toast(this.essence ? '카페인이 가득 찼다.' : '추출할 정수가 없다.');
     }
-    if (attack && !this.inventory.isEquipped('cutter')) this.toast('커터칼을 장착해야 한다.');
-    else if (attack && this.swing <= 0 && this.extraction <= 0) {
+    if (attack && this.swing <= 0 && this.extraction <= 0) {
       this.swing = cutter.interval;
       const origin = new Vector3(player.x,player.y+eye,player.z);
       const direction = new Vector3(-Math.sin(yaw)*Math.cos(pitch),Math.sin(pitch),-Math.cos(yaw)*Math.cos(pitch));
@@ -89,9 +78,8 @@ export class ArenaCombat {
         if (this.hp <= 0) {
           this.enemy.visible = false;
           this.nextSpawn = 6;
-          if (this.inventory.addEssence(TUNABLES.drops.essencePerKill)) {
-            this.toast('처치! 정수 확보 · 가방에서 확인');
-          } else this.toast('처치! 가방에 정수를 넣을 공간이 없다.');
+          this.essence += TUNABLES.drops.essencePerKill;
+          this.toast('처치! 정수 확보 · X 또는 추출 버튼');
         } else this.toast('커터칼 명중');
       } else this.toast('커터칼 휘두르기');
     }
@@ -114,16 +102,15 @@ export class ArenaCombat {
         }
       }
     }
-    if (this.extraction > 0 && canExtract && !resources.cause) {
+    if (this.extraction > 0 && playing && !resources.cause) {
       this.extraction -= dt;
       if (this.extraction <= 0) {
         const rule = RULES.extraction.essence;
-        const batches = Math.min(Math.floor(this.inventory.essence/rule.input),TUNABLES.extractor.maxEssenceBatches,
+        const batches = Math.min(Math.floor(this.essence/rule.input),TUNABLES.extractor.maxEssenceBatches,
           Math.ceil((RULES.resources.caffeineMax-resources.current.caffeine)/rule.caffeine));
-        if (this.inventory.spendEssence(batches*rule.input)) {
-          resources.applyDelta({caffeine:batches*rule.caffeine});
-          this.toast(`정수 추출 완료 · CAF ${Math.floor(resources.current.caffeine)}`);
-        }
+        this.essence -= batches*rule.input;
+        resources.applyDelta({caffeine:batches*rule.caffeine});
+        this.toast(`정수 추출 완료 · CAF ${Math.floor(resources.current.caffeine)}`);
       }
     }
   }
