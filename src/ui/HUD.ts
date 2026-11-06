@@ -6,7 +6,7 @@ import type { Settings } from './Settings';
 import { keyLabel } from './Settings';
 
 export interface HudSnapshot {
-  state:GameState; resources:Readonly<Resources>; mode:string; cutterEquipped:boolean; onStairs:boolean; elapsed:number; caffeineSpent:number; fps:number;
+  state:GameState; resources:Readonly<Resources>; mode:string; onStairs:boolean; elapsed:number; caffeineSpent:number; fps:number;
 }
 
 export class HUD {
@@ -22,7 +22,6 @@ export class HUD {
   private readonly hints:HTMLElement;
   private readonly message:HTMLElement;
   private readonly route:HTMLElement;
-  private readonly weapon:HTMLElement;
   private toastUntil=0;
   constructor(parent:HTMLElement,debug:boolean){
     this.root.className='hud';
@@ -39,14 +38,13 @@ export class HUD {
     const get=(id:string):HTMLElement=>{const e=this.root.querySelector<HTMLElement>(id);if(!e)throw new Error(id);return e;};
     this.hp=get('#hp-value');this.caf=get('#caf-value');this.stamina=get('#stamina-value');
     this.hpFill=get('#hp-fill');this.cafFill=get('#caf-fill');this.staminaFill=get('#stamina-fill');
-    this.debug=get('#debug-output');this.fps=get('#fps-output');this.hints=get('#hints');this.route=get('#office-route');this.weapon=get('.weapon');
+    this.debug=get('#debug-output');this.fps=get('#fps-output');this.hints=get('#hints');this.route=get('#office-route');
     this.message=document.createElement('div');this.message.className='toast';this.message.setAttribute('role','status');this.message.hidden=true;parent.append(this.message);
   }
   toast(message:string):void{this.message.textContent=message;this.toastUntil=performance.now()+TUNABLES.prototype.uiToastSeconds*1000;}
   update(snapshot:HudSnapshot,settings:Settings):void{
     const {resources:r,state}=snapshot;
     this.root.hidden=state==='MENU'||state==='LOADING'||state==='INTRO'||state==='ENDING';
-    this.weapon.hidden=!snapshot.cutterEquipped;
     const route=snapshot.onStairs?'비상계단 · 상층 입구로 하강':'최상층 · 오른쪽 끝 비상계단으로';
     if(this.route.textContent!==route)this.route.textContent=route;
     this.root.classList.toggle('danger',r.caffeine<=TUNABLES.debug.caffeineWarning&&state!=='DEAD');
@@ -59,7 +57,7 @@ export class HUD {
     this.staminaFill.style.width=`${r.stamina/RULES.resources.staminaMax*100}%`;
     this.hints.hidden=!settings.tutorial;
     this.hints.textContent=`${keyLabel(settings.bindings['sprint'][0]??'')} 달리기　${keyLabel(settings.bindings['dash'][0]??'')} 대시　${keyLabel(settings.bindings['slide'][0]??'')} 슬라이드　${keyLabel(settings.bindings['jump'][0]??'')} ×2 점프　${keyLabel(settings.bindings['inventory'][0]??'')} 소지품　ESC 정지`;
-    this.message.hidden=state==='INVENTORY'||performance.now()>this.toastUntil;
+    this.message.hidden=performance.now()>this.toastUntil;
     this.fps.hidden=!settings.showFps;this.fps.textContent=`${snapshot.fps.toFixed(0)} FPS`;
     const elapsed=Math.floor(snapshot.elapsed);
     const clock=this.root.querySelector('#run-clock');if(clock)clock.textContent=`${String(Math.floor(elapsed/60)).padStart(2,'0')}:${String(elapsed%60).padStart(2,'0')}`;
