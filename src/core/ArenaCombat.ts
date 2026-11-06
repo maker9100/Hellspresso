@@ -1,8 +1,11 @@
+import { BOSS_FLOOR, BOSS_HP, CITY_CENTER, FIRST_STATION, STATION } from '../assets/campaignPlan';
+import { trainModel } from '../assets/campaignWorld';
 import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, Ray, SphereGeometry, Vector3 } from 'three';
 import type { Scene } from 'three';
 import { disposeGroup } from '../assets/procedural';
+import { createDemonPortal } from '../assets/demonPortal';
 import { createOfficeDemon } from '../assets/officeDemon';
-import { FLOORS, ROUTE_X, floorAt } from '../assets/officeRoute';
+import { FLOORS, LIFTS, ROUTE_X, floorAt, inSafeZone } from '../assets/officeRoute';
 import { RULES } from '../config/rules';
 import { TUNABLES } from '../config/tunables';
 import type { CollisionWorld } from '../physics/CollisionWorld';
@@ -14,7 +17,7 @@ import type { Vec3 } from './types';
 
 type Flash = 'hit'|'hurt'|'heal';
 interface Enemy {
-  mesh:Group; position:Vec3; hp:number; ranged:boolean; attackIn:number; boss:boolean;
+  mesh:Group; position:Vec3; hp:number; ranged:boolean; attackIn:number; boss:boolean; train?:boolean;
 }
 interface Shot {
   mesh:Mesh; pos:Vector3; velocity:Vector3; damage:number; seconds:number;
@@ -34,6 +37,12 @@ export interface CombatActions {
 const HEALING = Object.keys(RULES.healing) as HealingId[];
 
 export class ArenaCombat {
+  private train:Enemy|undefined;
+  private trainClock=0;
+  private trainContact=0;
+  private trainDefeated=false;
+  get trainCleared():boolean{return this.trainDefeated;}
+  get trainHP():number{return this.train?.hp??0;}
   private readonly group = new Group();
   private readonly enemyPool:Group[]=[];
   private readonly guardWeapons:Group[]=[];
@@ -47,7 +56,10 @@ export class ArenaCombat {
   private readonly ammo=new Map<WeaponId,Ammo>();
   private enemies:Enemy[]=[];
   private floor=-1;
-  private spawnIn=0;
+  private readonly portal=createDemonPortal();
+  private reinforcementWait=6;
+  private arrival: {position:Vec3; seconds:number}|undefined;
+  private readonly patrols:Vec3[][]=[];
   private cooldown=0;
   private swing=0;
   private reload: {id:WeaponId; time:number}|undefined;
@@ -58,13 +70,18 @@ export class ArenaCombat {
   constructor(scene:Scene,private readonly world:CollisionWorld,private readonly notice:(text:string)=>void,
     private readonly hooks:ArenaHooks={spawn:{x:0,y:0,z:13}},private readonly inventory=new Inventory()){
     this.walls=world.boxes.map(b=>new Box3(new Vector3(b.min.x,b.min.y,b.min.z),new Vector3(b.max.x,b.max.y,b.max.z)));
+    this.group.add(this.portal);
     scene.add(this.group);
   }
   reset():void{
     this.clearZone();
-    this.floor=-1;this.spawnIn=0;this.cooldown=0;this.swing=0;this.healCooldown=0;
+    if(this.train){this.train.mesh.removeFromParent();disposeGroup(this.train.mesh);this.train=undefined;}
+    this.trainClock=0;this.trainContact=0;this.trainDefeated=false;
+    this.floor=-1;this.cooldown=0;this.swing=0;this.healCooldown=0;
     this.reload=undefined;this.extraction=undefined;this.healing=undefined;this.ammo.clear();this.inventory.reset();
   }
+  get livingDemons():number{return this.enemies.filter(enemy=>enemy.hp>0).length;}
+  get portalActive():boolean{return !!this.arrival;}
   get cutterSwing():number{return Math.sin(Math.PI*Math.min(1,this.swing/.23));}
 
   ammoLabel(id:WeaponId):string {
@@ -85,10 +102,12 @@ export class ArenaCombat {
   private clearZone():void{
     for(const mesh of this.enemyPool)mesh.visible=false;
     this.enemies=[];
+    this.arrival=undefined;this.portal.visible=false;this.reinforcementWait=6;
     for(const shot of this.shotPool){shot.seconds=0;shot.mesh.visible=false;}
   }
   private spawn(position:Vec3,ranged=false,boss=false):void{
-    const index=this.enemies.length;
+    const dead=this.enemies.findIndex(enemy=>enemy.hp<=0);
+    const index=dead<0?this.enemies.length:dead;
     let mesh=this.enemyPool[index];
     if(!mesh){
       mesh=(index===0?this.hooks.model:undefined)??createOfficeDemon();
@@ -105,33 +124,83 @@ export class ArenaCombat {
     this.guardWeapons[index]!.visible=ranged;
     mesh.visible=true;mesh.position.set(position.x,position.y,position.z);
     mesh.scale.setScalar(boss?1.45:ranged?.91:1);
-    this.enemies.push({mesh,position:{...position},hp:boss?200:ranged?60:80,ranged,attackIn:1.1,boss});
+    this.enemies[index]={mesh,position:{...position},hp:boss?200:ranged?60:80,ranged,attackIn:1.1+index*.29,boss};
   }
-  private enterZone(index:number):void{
+  private points(index:number):Vec3[]{
+    const cached=this.patrols[index];
+    if(cached)return cached;
+    const floor=FLOORS[index]!;
+    const x=index===0?0:ROUTE_X, lift=LIFTS[index];
+    const offsets=index>=5?[-28,-20,-12,-6,0,6,12,20,28]:[-9,-6,-3,0,3,6,9];
+    const points:Vec3[]=[];
+    for(let z=floor.start-6;z>floor.end+2;z-=2.4){
+      for(const offset of offsets){
+        const p={x:x+offset,y:floor.y,z};
+        if(this.world.canOccupy(p,2)&&!inSafeZone(p,index)&&(!lift||Math.hypot(p.x-lift.x,p.z-lift.z)>2.4))points.push(p);
+      }
+    }
+    this.patrols[index]=points;
+    return points;
+  }
+
+  private enterZone(index:number,player:Vec3):void{
     this.clearZone();
     this.floor=index;
-    this.spawnIn=0;
-    if(!this.hooks.stage||index===0){this.spawn(this.hooks.spawn);return;}
+    if(!this.hooks.stage){this.spawn(this.hooks.spawn);return;}
     const floor=FLOORS[index]!;
-    const offsets=index===4?[-5,5,-3,3]:index===3?[-1.2,1.4,.8]:[-1.4,1.4];
+    const points=this.points(index).filter(p=>Math.hypot(p.x-player.x,p.z-player.z)>4);
+    if(index===BOSS_FLOOR&&this.train&&!this.trainDefeated){this.enemies.push(this.train);this.train.mesh.visible=true;}
     for(let i=0;i<floor.guards;i++){
-      this.spawn({x:ROUTE_X+(offsets[i]??0),y:floor.y,z:floor.start-7-i*(index===4?4.2:3.3)},index===3||index===4&&i===2,index===4&&i===3);
+      const targetZ=floor.start-8-i*3.7;
+      points.sort((a,b)=>Math.abs(a.z-targetZ)-Math.abs(b.z-targetZ));
+      const p=points.shift();
+      if(p)this.spawn(p,(index===3&&i%2===0)||(index===4&&i===2)||(index>=5&&i%2===0&&(index>=FIRST_STATION+3||floor.guards>=6)),index===4&&i===4);
     }
   }
+
+  private reinforce(dt:number,player:Vec3):void{
+    const target=FLOORS[this.floor]!.guards;
+    if(this.arrival){
+      const {position}=this.arrival;
+      const angle=Math.atan2(player.x-position.x,player.z-position.z);
+      this.portal.rotation.y=angle;
+      const progress=1-this.arrival.seconds/1.45;
+      this.portal.scale.setScalar(.26+Math.sin(Math.PI*Math.min(.9,progress))*.92);
+      this.portal.children[1]!.rotation.z+=dt*1.4;
+      this.arrival.seconds-=dt;
+      if(this.arrival.seconds>0)return;
+      this.spawn(position,this.floor>=3&&Math.random()<.4);
+      this.arrival=undefined;this.portal.visible=false;this.reinforcementWait=5;
+      return;
+    }
+    if(this.livingDemons>=target){this.reinforcementWait=6;return;}
+    if((this.reinforcementWait-=dt)>0)return;
+    const candidates=this.points(this.floor).filter(p=>{
+      const range=Math.hypot(p.x-player.x,p.z-player.z);
+      return range>=5&&range<=16&&this.enemies.every(e=>e.hp<=0||Math.hypot(p.x-e.position.x,p.z-e.position.z)>2.2);
+    });
+    const position=candidates[Math.floor(Math.random()*candidates.length)];
+    if(!position){this.reinforcementWait=1;return;}
+    this.arrival={position,seconds:1.45};
+    this.portal.position.set(position.x,position.y+1.28,position.z);
+    this.portal.scale.setScalar(.26);
+    this.portal.visible=true;
+  }
+
   private damage(enemy:Enemy,damage:number):void{
     if(enemy.hp<=0)return;
     enemy.hp-=damage;
     this.hooks.flash?.('hit');
     if(enemy.hp>0)return;
     enemy.mesh.visible=false;
-    this.spawnIn=6;
+    if(enemy.train){this.trainDefeated=true;return;}
     const {essenceMin,essenceMax}=TUNABLES.drops;
     const essence=essenceMin+Math.floor(Math.random()*(essenceMax-essenceMin+1));
     const drop=(id:ItemId,count:number,offset:number)=>{
       if(this.hooks.drop)this.hooks.drop(id,count,{...enemy.position,x:enemy.position.x+offset});
       else this.inventory.add(id,count);
     };
-    drop('essence',essence,-.21);
+    this.inventory.add('essence',essence);
     drop('heart',TUNABLES.drops.heartsPerKill,.23);
     const materials=TUNABLES.drops.craftingProbabilities;
     if(Math.random()<materials.cutterBlade)drop('cutterBlade',1,-.52);
@@ -157,8 +226,9 @@ export class ArenaCombat {
     for(const enemy of this.enemies){
       if(enemy.hp<=0)continue;
       const {x,y,z}=enemy.position;
-      const half=enemy.boss?.65:.44;
-      const bounds=new Box3(new Vector3(x-half,y,z-half),new Vector3(x+half,y+(enemy.boss?2.8:1.95),z+half));
+      const half=enemy.train?1.42:enemy.boss?.65:.44;
+      const depth=enemy.train?4.52:half;
+      const bounds=new Box3(new Vector3(x-half,y,z-depth),new Vector3(x+half,y+(enemy.boss?2.8:1.95),z+depth));
       if(!ray.intersectBox(bounds,hit))continue;
       const distance=hit.distanceTo(ray.origin);
       if(distance<=max&&(!nearest||distance<nearest.distance))nearest={enemy,distance};
@@ -305,10 +375,34 @@ export class ArenaCombat {
     }
   }
 
+  private updateTrain(dt:number,player:Vec3,resources:ResourceSystem):void{
+    const floor=STATION[6]!;
+    if(this.trainDefeated||player.z>floor.start-12.1)return;
+    if(!this.train){
+      const mesh=trainModel(0x922638);
+      const position={x:CITY_CENTER,y:floor.y,z:floor.start-33};
+      this.train={mesh,position,hp:BOSS_HP,ranged:false,attackIn:2.4,boss:true,train:true};
+      this.group.add(mesh);this.enemies.push(this.train);
+    }
+    const train=this.train;
+    this.trainClock+=dt;this.trainContact-=dt;
+    train.position.z=floor.start-34+Math.sin(this.trainClock*.76)*11;
+    train.mesh.position.set(train.position.x,train.position.y,train.position.z);
+    if(this.trainContact<=0&&Math.abs(player.x-train.position.x)<1.78&&Math.abs(player.z-train.position.z)<4.85){
+      resources.applyDelta({hp:-20});this.hooks.flash?.('hurt');this.trainContact=.75;
+    }
+    if((train.attackIn-=dt)<=0){
+      train.attackIn=2.65;
+      const muzzle=new Vector3(train.position.x,train.position.y+1.16,train.position.z+4.54);
+      const aim=new Vector3(player.x,player.y+1.15,player.z).sub(muzzle).normalize();
+      this.addShot('guard',muzzle,aim.multiplyScalar(12),12,4);
+    }
+  }
+
   update(dt:number,player:Vec3,eye:number,yaw:number,pitch:number,active:boolean,actions:CombatActions,resources:ResourceSystem,safe=false):void{
     if(!active)return;
     const floor=this.hooks.stage?floorAt(player):0;
-    if(floor!==this.floor)this.enterZone(floor);
+    if(floor!==this.floor)this.enterZone(floor,player);
     this.cooldown=Math.max(0,this.cooldown-dt);this.swing=Math.max(0,this.swing-dt);this.healCooldown-=dt;
     this.prepareUse(actions,resources);
     if(actions.reload)this.startReload();
@@ -317,13 +411,14 @@ export class ArenaCombat {
       this.reload=undefined;
       if(ammo&&spec.magazine){const count=Math.min(spec.magazine-ammo.loaded,ammo.reserve);ammo.loaded+=count;ammo.reserve-=count;}
     }
+    if(this.hooks.stage&&floor===BOSS_FLOOR)this.updateTrain(dt,player,resources);
     if(actions.attack)this.fire(player,eye,yaw,pitch);
     this.tickShots(dt,player,eye,safe,resources);
 
     const onFloor=!this.hooks.stage||Math.abs(player.y-FLOORS[floor]!.y)<1.4;
     if(!safe&&onFloor&&!resources.cause){
       for(const enemy of this.enemies){
-        if(enemy.hp<=0)continue;
+        if(enemy.hp<=0||enemy.train)continue;
         const p=enemy.position,dx=player.x-p.x,dz=player.z-p.z,range=Math.hypot(dx,dz);
         if(range>21)continue;
         enemy.mesh.rotation.y=Math.atan2(dx,dz);
@@ -345,9 +440,7 @@ export class ArenaCombat {
       }
     }
     this.finishUse(dt,resources);
-    if(floor===0&&onFloor&&this.enemies.every(enemy=>enemy.hp<=0)&&(this.spawnIn-=dt)<=0){
-      this.enemies=[];this.spawn(this.hooks.spawn);
-    }
+    if(this.hooks.stage&&onFloor&&FLOORS[floor]!.guards>0)this.reinforce(dt,player);
   }
   dispose():void{
     for(const shot of this.shotPool)shot.mesh.removeFromParent();

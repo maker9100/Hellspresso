@@ -1,6 +1,8 @@
+import { BOSS_FLOOR, FIRST_STATION, STATION, STAGE04_Z, WARPS, stationEscalator } from '../assets/campaignPlan';
+import { StationGuide } from './StationGuide';
 import { ACESFilmicToneMapping, Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
 import { assets } from '../assets/registry';
-import { FLOORS, MAP_LOOT, floorAt, inSafeZone } from '../assets/officeRoute';
+import { FLOORS, LIFTS, MAP_LOOT, floorAt, inSafeZone, liftAt } from '../assets/officeRoute';
 import { officePlan } from '../assets/office';
 import { createWeaponViews } from '../assets/weaponView';
 import { createOfficeDemon } from '../assets/officeDemon';
@@ -38,6 +40,10 @@ export class Game {
   private readonly cutter=assets.cutter();
   private readonly weaponViews=createWeaponViews();
   private readonly collision=new CollisionWorld(this.arena.colliders);
+  private readonly guide=new StationGuide(this.collision);
+  private rumble:{context:AudioContext; gain:GainNode; source:OscillatorNode}|undefined;
+  private warpArmed=true;
+  private warpTint=0;
   private readonly sun=new DirectionalLight(0xffe0be,1.85);
   private readonly events=new AbortController();
   private readonly hud:HUD;
@@ -52,6 +58,8 @@ export class Game {
   private readonly holySeen=new Set<number>();
   private actions:CombatActions={};
   private pick=false;
+  private liftDirection:1|-1|undefined;
+  private liftTrip:{target:number;remaining:number;moved:boolean}|undefined;
   private map=false;
   private readonly touchMode=matchMedia('(pointer: coarse)').matches;
   private resources=new ResourceSystem();
@@ -73,14 +81,15 @@ export class Game {
     this.renderer.toneMapping=ACESFilmicToneMapping;
     this.scene.background=new Color(0x1a1215);
     this.scene.fog=new Fog(0x241c1b,16,54);
-    this.scene.add(this.arena.root);
+    this.scene.add(this.arena.root,this.guide.root);
+    this.guide.reset();
     this.scene.add(new HemisphereLight(0xffe9d4,0x46323c,2.05));
     this.sun.position.set(...TUNABLES.prototype.sunPosition);this.sun.castShadow=true;
     const extent=TUNABLES.prototype.shadowExtent;
     Object.assign(this.sun.shadow.camera,{left:-extent,right:extent,top:extent,bottom:-extent,far:extent*3});
     this.scene.add(this.sun);
     this.camera.rotation.order='YXZ';this.camera.add(this.cutter,...this.weaponViews.values());this.scene.add(this.camera);
-    this.hud=new HUD(parent,new URLSearchParams(location.search).get('debug')==='1');
+    this.hud=new HUD(parent,new URLSearchParams(location.search).get('debug')==='1',this.arena.colliders);
     this.pointer=new PointerLock(this.renderer.domElement,locked=>{
       if(this.touchMode)return;
       if(locked && (this.machine.current==='PAUSED'||this.machine.current==='INVENTORY'))this.change('PLAYING');
@@ -92,7 +101,7 @@ export class Game {
 
     },{
       spawn:officePlan.enemySpawn, model:createOfficeDemon(), stage:true,
-      drop:(id,count,position)=>this.loot.drop(id,count,position), flash:type=>this.hud.flash(type),
+      drop:(id,count,position)=>this.loot.reward(id,count,position), flash:type=>this.hud.flash(type),
     },this.inventory);
     this.renderer.domElement.addEventListener('pointerdown',event=>{
       if(event.button===0 && this.pointer.locked && this.machine.current==='PLAYING')this.actions.attack=true;
@@ -102,6 +111,7 @@ export class Game {
       if(action==='attack'){this.actions.attack=true;return;}
       if(action==='extract'){this.requestExtraction();return;}
       if(action==='pickup'){this.pick=true;return;}
+      if(action==='lift-up'||action==='lift-down'){this.liftDirection=action==='lift-up'?-1:1;return;}
       if(action==='heal'){this.actions.heal='quick';return;}
       if(action==='reload'){this.actions.reload=true;return;}
       if(action==='map'){this.map=!this.map;return;}
@@ -143,9 +153,20 @@ export class Game {
   }
 
   private start():void{
+    if(!this.rumble&&typeof AudioContext==='function'){
+      const context=new AudioContext();
+      const source=context.createOscillator(), filter=context.createBiquadFilter(), gain=context.createGain();
+      source.type='triangle';source.frequency.value=54;
+      filter.type='lowpass';filter.frequency.value=180;
+      gain.gain.value=0;
+      source.connect(filter).connect(gain).connect(context.destination);source.start();
+      this.rumble={context,gain,source};
+    }
+    if(this.rumble)void this.rumble.context.resume().catch(()=>{});
     this.change('LOADING');
     this.resources=new ResourceSystem();this.movement=new Movement(this.collision,this.arena.spawn);
-    this.combat.reset();this.loot.reset();this.holySeen.clear();this.map=false;
+    this.combat.reset();this.loot.reset();this.holySeen.clear();this.map=false;this.liftTrip=undefined;
+    this.guide.reset();this.warpArmed=true;this.warpTint=0;this.arena.campaign.setGates(false,false);
     this.elapsed=0;this.caffeineSpent=0;this.yaw=0;this.pitch=0;this.loop.reset();
     this.openingTime=0;
     this.change('INTRO');
@@ -175,7 +196,7 @@ export class Game {
     }
     this.loop?.stepper.setRunning(this.machine.simulating);
     this.input?.clear();
-    this.actions={};this.pick=false;
+    this.actions={};this.pick=false;this.liftDirection=undefined;
     this.parent.dataset['state']=next;
     this.touch?.show(this.touchMode && next==='PLAYING');
     this.menu?.show(next,this.resources.cause);
@@ -197,18 +218,55 @@ export class Game {
       else if(this.input.matches('extractor',event.code))this.requestExtraction();
       else if(this.input.matches('interact',event.code))this.pick=true;
       else if(this.input.matches('reload',event.code))this.actions.reload=true;
+      else if(event.code==='KeyQ'&&liftAt(this.movement.position)>=0)this.liftDirection=-1;
       else if(event.code==='KeyM')this.map=!this.map;
     }
   };
 
   private update(dt:number):void{
     if(this.resources.cause || this.machine.current==='MENU'||this.machine.current==='LOADING'||this.machine.current==='INTRO'||this.machine.current==='DEAD'||this.machine.current==='ENDING')return;
+    if(this.liftTrip){
+      const trip=this.liftTrip;
+      trip.remaining-=dt;
+      if(!trip.moved&&trip.remaining<=.66){
+        this.movement=new Movement(this.collision,LIFTS[trip.target]!);
+        this.yaw=Math.PI;this.pitch=0;trip.moved=true;
+      }
+      if(trip.remaining<=0)this.liftTrip=undefined;
+      this.actions={};this.pick=false;this.liftDirection=undefined;
+      return;
+    }
     const intent=this.machine.current==='PLAYING'
       ? this.touchMode ? {...NEUTRAL_INTENT,...this.touch.intent()} : this.input.intent()
       : NEUTRAL_INTENT;
     this.movement.update(dt,intent,this.yaw,this.resources);
+    if(this.machine.current==='PLAYING'&&this.movement.grounded&&stationEscalator(this.movement.position)){
+      this.movement.position=this.collision.move(this.movement.position,{x:0,y:-dt,z:-dt*.82},this.movement.height,true).position;
+    }
     const p=this.movement.position;
+    this.warpTint=Math.max(0,this.warpTint-dt*1.65);
+    const warp=WARPS.find(w=>Math.abs(p.y-w.from.y)<.8&&Math.hypot(p.x-w.from.x,p.z-w.from.z)<1.15);
+    if(!warp)this.warpArmed=true;
+    if(warp&&this.warpArmed){
+      this.warpArmed=false;this.warpTint=1;
+      this.movement=new Movement(this.collision,warp.to);
+      this.guide.reset();
+      return;
+    }
+    const bossFloor=STATION[6]!;
+    const gate=bossFloor.start-12;
+    if(this.combat.trainHP>0&&p.z>gate-.35)p.z=gate-.35;
+    if(!this.combat.trainCleared&&p.z<bossFloor.end+.72)p.z=bossFloor.end+.72;
     const floor=floorAt(p), safe=inSafeZone(p,floor);
+    const lift=liftAt(p);
+    if(lift>=0&&(this.pick||this.liftDirection)){
+      const target=lift+(this.liftDirection??(lift===LIFTS.length-1?-1:1));
+      if(LIFTS[target]){
+        this.liftTrip={target,remaining:1.32,moved:false};
+        return;
+      }
+    }
+    this.guide.update(dt,p,floor,this.settings.value.autoGuide);
     const current=this.resources.current;
     if(safe&&!this.holySeen.has(floor)){
       this.holySeen.add(floor);
@@ -218,13 +276,14 @@ export class Game {
     const before=this.resources.current.caffeine;
     this.resources.advance(dt,safe);
     this.caffeineSpent+=before-this.resources.current.caffeine;
-    this.loot.update(dt,p);
+    this.loot.update(dt,p,this.inventory);
     if(this.pick&&this.loot.collect(p,this.inventory))this.hud.flash('pickup');
     if(!this.resources.cause)this.combat.update(dt,p,this.movement.eyeHeight,
       this.yaw,this.pitch,this.machine.simulating,this.actions,this.resources,safe);
-    this.actions={};this.pick=false;
+    this.actions={};this.pick=false;this.liftDirection=undefined;
     this.elapsed+=dt;this.resolveDeath();
-    if(this.machine.current==='PLAYING'&&p.z<-164)this.change('ENDING');
+    this.arena.campaign.setGates(this.combat.trainHP>0,this.combat.trainCleared);
+    if(this.machine.current==='PLAYING'&&this.combat.trainCleared&&p.z<STAGE04_Z+.75)this.change('ENDING');
   }
 
   private requestExtraction():void{
@@ -238,6 +297,9 @@ export class Game {
     return {state:this.machine.current,cause:this.resources.cause,resources:this.resources.current,position:{...p},
       height:this.movement.height,grounded:this.movement.grounded,jumps:this.movement.jumps,mode:this.movement.mode,
       cutterEquipped:weapon==='cutter',floor,onStairs:p.z<FLOORS[floor]!.end,map:this.map,weapon,
+      lift:liftAt(p),liftShade:this.liftTrip?Math.min(1,Math.min(1.32-this.liftTrip.remaining,this.liftTrip.remaining)*3.9):0,
+      bossHP:floor===BOSS_FLOOR?this.combat.trainHP:0,guide:this.guide.hint,warpTint:this.warpTint,
+      demons:this.combat.livingDemons,portal:this.combat.portalActive,essence:this.inventory.essence,
       ammo:weapon?this.combat.ammoLabel(weapon):'',pickup:!!this.loot.nearest(p),safe:inSafeZone(p,floor),
       yaw:this.yaw,pitch:this.pitch,elapsed:this.elapsed,caffeineSpent:this.caffeineSpent,fps:this.fps};
   }
@@ -297,7 +359,10 @@ export class Game {
         this.pitch=Math.max(-limit,Math.min(limit,this.pitch-look.y*this.settings.value.sensitivity));
       }
       this.camera.rotation.set(this.pitch,this.yaw,0,'YXZ');
-      const p=this.movement.position;this.camera.position.set(p.x,p.y+this.movement.eyeHeight,p.z);
+      const p=this.movement.position;
+      const shake=floorAt(p)===BOSS_FLOOR-1&&this.machine.simulating
+        ? Math.sin(this.elapsed*22)*.012*this.settings.value.screenShake : 0;
+      this.camera.position.set(p.x,p.y+this.movement.eyeHeight+shake,p.z);
       this.cutter.visible=this.inventory.isEquipped('cutter') && this.machine.current!=='DEAD' && this.machine.current!=='ENDING';
       const c=TUNABLES.prototype.cutterModel;
       const swing=this.combat.cutterSwing;
@@ -312,13 +377,25 @@ export class Game {
         model.rotation.z=-.24+this.combat.cutterSwing*.43;
       }
     }
+    if(this.rumble){
+      const tremor=snapshot.state==='PLAYING'&&snapshot.floor===BOSS_FLOOR-1
+        ? (.026+.018*Math.sin(this.elapsed*2.5))*this.settings.value.effectsVolume : 0;
+      this.rumble.gain.gain.setTargetAtTime(tremor,this.rumble.context.currentTime,.12);
+    }
+    const outdoors=snapshot.floor>=5&&snapshot.floor<FIRST_STATION;
+    const fog=this.scene.fog as Fog;
+    fog.color.setHex(outdoors?0x53262c:0x241c1b);
+    fog.near=outdoors?29:16;fog.far=outdoors?122:54;
+    (this.scene.background as Color).setHex(outdoors?0x512027:0x1a1215);
     this.hud.update(snapshot,this.settings.value);
+    this.touch.setLift(snapshot.lift,snapshot.liftShade>0);
     this.menu.updateInventory(snapshot.resources.caffeine);
     this.renderer.render(this.scene,this.camera);
   }
 
   dispose():void{
-    this.events.abort();this.loop.dispose();this.input.dispose();this.pointer.dispose();this.menu.dispose();this.touch.dispose();this.combat.dispose();this.loot.dispose();
+    this.events.abort();this.loop.dispose();this.input.dispose();this.pointer.dispose();this.menu.dispose();this.touch.dispose();this.combat.dispose();this.loot.dispose();this.guide.dispose();
+    if(this.rumble){this.rumble.source.stop();void this.rumble.context.close().catch(()=>{});}
     this.arena.dispose();disposeGroup(this.cutter);for(const model of this.weaponViews.values())disposeGroup(model);this.sun.shadow.map?.dispose();this.renderer.dispose();
     this.parent.replaceChildren();
   }
