@@ -1,6 +1,6 @@
-export type GameState = 'MENU' | 'LOADING' | 'PLAYING' | 'INVENTORY' | 'PAUSED' | 'DEAD' | 'ENDING';
+export type GameState = 'MENU' | 'LOADING' | 'INTRO' | 'PLAYING' | 'INVENTORY' | 'PAUSED' | 'DEAD' | 'ENDING';
 const TRANSITIONS: Record<GameState, readonly GameState[]> = {
-  MENU: ['LOADING'], LOADING: ['PAUSED', 'MENU'],
+  MENU: ['LOADING'], LOADING: ['INTRO', 'PAUSED', 'MENU'], INTRO: ['PAUSED', 'MENU'],
   PLAYING: ['INVENTORY', 'PAUSED', 'DEAD', 'ENDING'],
   INVENTORY: ['PLAYING', 'PAUSED', 'DEAD'],
   PAUSED: ['PLAYING', 'MENU', 'DEAD'], DEAD: ['MENU'], ENDING: ['MENU'],

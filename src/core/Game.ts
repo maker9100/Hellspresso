@@ -1,5 +1,7 @@
-import { ACESFilmicToneMapping, Color, DirectionalLight, Fog, GridHelper, HemisphereLight, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
+import { ACESFilmicToneMapping, Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
 import { assets } from '../assets/registry';
+import { officePlan } from '../assets/office';
+import { createOfficeDemon } from '../assets/officeDemon';
 import { disposeGroup } from '../assets/procedural';
 import { TUNABLES } from '../config/tunables';
 import { RULES } from '../config/rules';
@@ -19,6 +21,8 @@ import { TouchControls } from '../ui/TouchControls';
 import { PointerLock } from './PointerLock';
 import { NEUTRAL_INTENT } from './types';
 
+const OPENING_DURATION=4.65;
+
 export class Game {
   private readonly settings=new SettingsStore();
   private readonly renderer=new WebGLRenderer({antialias:true});
@@ -28,7 +32,7 @@ export class Game {
   private readonly arena=assets.arena();
   private readonly cutter=assets.cutter();
   private readonly collision=new CollisionWorld(this.arena.colliders);
-  private readonly sun=new DirectionalLight(TUNABLES.prototype.sunColor,TUNABLES.prototype.sunlightIntensity);
+  private readonly sun=new DirectionalLight(0xffe0be,1.85);
   private readonly events=new AbortController();
   private readonly hud:HUD;
   private readonly menu:Menu;
@@ -48,22 +52,23 @@ export class Game {
   private pitch=0;
   private displayTime=0;
   private fps=0;
+  private openingTime=0;
+  private readonly openingTarget=new Vector3();
+  private readonly menuTarget=new Vector3(-2.3,1.48,-2);
 
   constructor(private readonly parent:HTMLElement){
     parent.replaceChildren(this.renderer.domElement);
     this.renderer.domElement.className='game-canvas';
     this.renderer.domElement.setAttribute('aria-label','HELLSPRESSO 3D 플레이 화면');
     this.renderer.toneMapping=ACESFilmicToneMapping;
-    this.scene.background=new Color(TUNABLES.presentation.palette.background);
-    this.scene.fog=new Fog(TUNABLES.presentation.palette.background,TUNABLES.prototype.fogNear,TUNABLES.prototype.fogFar);
+    this.scene.background=new Color(0x1a1215);
+    this.scene.fog=new Fog(0x241c1b,16,54);
     this.scene.add(this.arena.root);
-    this.scene.add(new HemisphereLight(TUNABLES.prototype.skyColor,TUNABLES.prototype.groundColor,TUNABLES.prototype.hemisphereIntensity));
+    this.scene.add(new HemisphereLight(0xffe9d4,0x46323c,2.05));
     this.sun.position.set(...TUNABLES.prototype.sunPosition);this.sun.castShadow=true;
     const extent=TUNABLES.prototype.shadowExtent;
     Object.assign(this.sun.shadow.camera,{left:-extent,right:extent,top:extent,bottom:-extent,far:extent*3});
     this.scene.add(this.sun);
-    const grid=new GridHelper(TUNABLES.prototype.grid.extent,TUNABLES.prototype.grid.divisions,TUNABLES.prototype.grid.color,TUNABLES.prototype.grid.color);
-    grid.position.y=TUNABLES.prototype.gridOffset;this.arena.root.add(grid);
     this.camera.rotation.order='YXZ';this.camera.add(this.cutter);this.scene.add(this.camera);
     this.hud=new HUD(parent,new URLSearchParams(location.search).get('debug')==='1');
     this.pointer=new PointerLock(this.renderer.domElement,locked=>{
@@ -72,7 +77,9 @@ export class Game {
       else if(!locked && this.machine.current==='PLAYING')this.change('PAUSED');
     },message=>this.hud.toast(message));
     this.input=new Input(()=>this.settings.value,()=>this.pointer.locked && this.machine.current==='PLAYING');
-    this.combat=new ArenaCombat(this.scene,this.collision,message=>this.hud.toast(message));
+    this.combat=new ArenaCombat(this.scene,this.collision,message=>this.hud.toast(message),{
+      spawn:officePlan.enemySpawn, chaseLimitZ:officePlan.stairZ, model:createOfficeDemon(),
+    });
     this.renderer.domElement.addEventListener('pointerdown',event=>{
       if(event.button===0 && this.pointer.locked && this.machine.current==='PLAYING')this.attack=true;
     },{signal:this.events.signal});
@@ -82,11 +89,11 @@ export class Game {
       if(action==='extract'){this.extract=true;return;}
       this.change(action==='pause'?'PAUSED':'INVENTORY');
     });
-    this.menu=new Menu(parent,this.settings,{start:()=>this.start(),resume:()=>this.resume(),menu:()=>this.change('MENU'),changed:()=>this.applySettings(),toast:message=>this.hud.toast(message)});
+    this.menu=new Menu(parent,this.settings,{start:()=>this.start(),skipOpening:()=>this.beginEscape(),resume:()=>this.resume(),menu:()=>this.change('MENU'),changed:()=>this.applySettings(),toast:message=>this.hud.toast(message)});
     this.loop=new FixedStepLoop(dt=>this.update(dt),delta=>this.render(delta));
     document.addEventListener('keydown',this.keydown,{signal:this.events.signal});
     const preventBrowserGesture = (event:Event):void => {
-      if(this.machine.current==='PLAYING')event.preventDefault();
+      if(this.machine.current==='PLAYING'||this.machine.current==='INTRO')event.preventDefault();
     };
     for(const type of ['selectstart','contextmenu','gesturestart','gesturechange','gestureend']){
       parent.addEventListener(type,preventBrowserGesture,{capture:true,passive:false,signal:this.events.signal});
@@ -109,8 +116,17 @@ export class Game {
     this.resources=new ResourceSystem();this.movement=new Movement(this.collision,this.arena.spawn);
     this.combat.reset();
     this.elapsed=0;this.caffeineSpent=0;this.yaw=0;this.pitch=0;this.loop.reset();
-    this.change('PAUSED');this.resume();
-    this.hud.toast('악마를 커터칼로 처치하고 정수를 추출하세요.');
+    this.openingTime=0;
+    this.change('INTRO');
+  }
+
+  private beginEscape():void{
+    if(this.machine.current!=='INTRO')return;
+    this.openingTime=OPENING_DURATION;
+    this.poseOpeningDemon();
+    this.change('PAUSED');
+    this.resume();
+    this.hud.toast('사무실을 가로질러 오른쪽 끝 비상계단으로.');
   }
 
   private resume():void{
@@ -123,7 +139,10 @@ export class Game {
     this.loop?.setRunning(false);
     if(this.machine.current==='DEAD' && next!=='MENU')return;
     this.machine.transition(next);
-    if(next==='MENU')this.combat.reset();
+    if(next==='MENU'){
+      this.combat.reset();
+      this.arena.openingDemon.visible=false;
+    }
     this.loop?.stepper.setRunning(this.machine.simulating);
     this.input?.clear();
     this.attack=false;this.extract=false;
@@ -148,7 +167,7 @@ export class Game {
   };
 
   private update(dt:number):void{
-    if(this.resources.cause || this.machine.current==='MENU'||this.machine.current==='LOADING'||this.machine.current==='DEAD'||this.machine.current==='ENDING')return;
+    if(this.resources.cause || this.machine.current==='MENU'||this.machine.current==='LOADING'||this.machine.current==='INTRO'||this.machine.current==='DEAD'||this.machine.current==='ENDING')return;
     const intent=this.machine.current==='PLAYING'
       ? this.touchMode ? {...NEUTRAL_INTENT,...this.touch.intent()} : this.input.intent()
       : NEUTRAL_INTENT;
@@ -161,11 +180,12 @@ export class Game {
       this.yaw,this.pitch,playing,this.attack,this.extract,this.resources);
     this.attack=false;this.extract=false;
     this.elapsed+=dt;this.resolveDeath();
+    if(this.machine.current==='PLAYING' && officePlan.reachedLanding(this.movement.position))this.change('ENDING');
   }
 
   private resolveDeath():void{if(this.resources.cause && this.machine.current!=='DEAD' && (this.machine.simulating||this.machine.current==='PAUSED'))this.change('DEAD');}
 
-  private snapshot(){return {state:this.machine.current,cause:this.resources.cause,resources:this.resources.current,position:{...this.movement.position},height:this.movement.height,grounded:this.movement.grounded,jumps:this.movement.jumps,mode:this.movement.mode,yaw:this.yaw,pitch:this.pitch,elapsed:this.elapsed,caffeineSpent:this.caffeineSpent,fps:this.fps};}
+  private snapshot(){return {state:this.machine.current,cause:this.resources.cause,resources:this.resources.current,position:{...this.movement.position},height:this.movement.height,grounded:this.movement.grounded,jumps:this.movement.jumps,mode:this.movement.mode,onStairs:this.movement.position.z<officePlan.stairZ,yaw:this.yaw,pitch:this.pitch,elapsed:this.elapsed,caffeineSpent:this.caffeineSpent,fps:this.fps};}
 
   private resize():void{
     const width=this.parent.clientWidth,height=this.parent.clientHeight;
@@ -182,13 +202,38 @@ export class Game {
     this.sun.shadow.needsUpdate=true;this.resize();
   }
 
+  private poseOpeningDemon():void{
+    const actor=this.arena.openingDemon;
+    const contact=Math.max(0,Math.min(1,(this.openingTime-1.85)/0.34));
+    const fall=Math.max(0,Math.min(1,(this.openingTime-2.30)/0.72));
+    actor.visible=true;
+    actor.position.set(-2.90-fall*0.83,-fall*0.02,8.10-fall*0.55);
+    actor.rotation.set(0.09+contact*0.99-fall*0.88,fall*0.15,fall*1.49);
+  }
+
+  private renderOpening(delta:number):void{
+    if(!document.hidden)this.openingTime=Math.min(OPENING_DURATION,this.openingTime+Math.min(delta,0.10));
+    this.poseOpeningDemon();
+    const strike=Math.max(0,1-Math.abs(this.openingTime-2.10)/0.25)*this.settings.value.screenShake;
+    const settle=Math.max(0,(this.openingTime-2.65)/2);
+    this.camera.position.set(-1.05+settle*0.66,1.28+settle*0.34-strike*0.12,10.56+settle*0.2);
+    this.openingTarget.set(-2.76+settle*1.2,1.36-strike*0.38-settle*0.32,8.44-settle*1.3);
+    this.camera.lookAt(this.openingTarget);
+    this.camera.rotateZ(strike*0.09);
+    this.cutter.visible=false;
+    this.menu.setOpeningBeat(this.openingTime>=OPENING_DURATION?2:this.openingTime>=2.23?1:0,this.settings.value.subtitles);
+  }
+
   private render(delta:number):void{
     this.displayTime+=delta;
     this.fps=delta>0?this.fps*0.9+0.1/delta:this.fps;
+    this.arena.animate(this.displayTime);
     if(this.machine.current==='MENU'){
-      const c=TUNABLES.prototype;
-      this.camera.position.set(c.menuCamera[0]+Math.sin(this.displayTime*c.menuDriftSpeed)*c.menuDriftDistance,c.menuCamera[1],c.menuCamera[2]);
-      this.camera.lookAt(new Vector3(...c.menuTarget));this.cutter.visible=false;
+      this.camera.position.set(2.3+Math.sin(this.displayTime*0.20)*0.72,2.16,11.75);
+      this.camera.lookAt(this.menuTarget);
+      this.cutter.visible=false;
+    }else if(this.machine.current==='INTRO'){
+      this.renderOpening(delta);
     }else{
       const look=this.touchMode?this.touch.look():this.input.look();
       if(this.machine.current==='PLAYING'){
@@ -198,9 +243,11 @@ export class Game {
       }
       this.camera.rotation.set(this.pitch,this.yaw,0,'YXZ');
       const p=this.movement.position;this.camera.position.set(p.x,p.y+this.movement.eyeHeight,p.z);
-      this.cutter.visible=this.machine.current!=='DEAD';
+      this.cutter.visible=this.machine.current!=='DEAD' && this.machine.current!=='ENDING';
       const c=TUNABLES.prototype.cutterModel;
-      this.cutter.position.y=c.position[1]+Math.sin(this.elapsed*c.bobFrequency)*c.bobAmplitude*this.settings.value.screenShake;
+      const swing=this.combat.cutterSwing;
+      this.cutter.rotation.z=c.rotation[2]+swing*0.96;
+      this.cutter.position.y=c.position[1]+Math.sin(this.elapsed*c.bobFrequency)*c.bobAmplitude*this.settings.value.screenShake+swing*0.042;
     }
     this.hud.update(this.snapshot(),this.settings.value);
     this.renderer.render(this.scene,this.camera);

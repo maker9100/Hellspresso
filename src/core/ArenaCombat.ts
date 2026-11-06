@@ -1,10 +1,17 @@
 import { Box3, BoxGeometry, Mesh, MeshStandardMaterial, Ray, Vector3 } from 'three';
-import type { Scene } from 'three';
+import type { Group, Scene } from 'three';
+import { disposeGroup } from '../assets/procedural';
 import { RULES } from '../config/rules';
 import { TUNABLES } from '../config/tunables';
 import type { CollisionWorld } from '../physics/CollisionWorld';
 import type { ResourceSystem } from '../player/Resources';
 import type { Vec3 } from './types';
+
+interface Encounter {
+  spawn:Vec3;
+  chaseLimitZ?:number;
+  model?:Group;
+}
 
 export class ArenaCombat {
   private readonly enemy = new Mesh(new BoxGeometry(0.85, 1.8, 0.65),
@@ -17,9 +24,15 @@ export class ArenaCombat {
   private essence = 0;
   private extraction = 0;
 
-  constructor(scene: Scene, private readonly world: CollisionWorld, private readonly toast: (text:string)=>void) {
+  constructor(scene: Scene, private readonly world: CollisionWorld, private readonly toast: (text:string)=>void,
+    private readonly encounter:Encounter={spawn:{x:0,y:0,z:13}}) {
     this.walls = world.boxes.map(box => new Box3(new Vector3(box.min.x,box.min.y,box.min.z), new Vector3(box.max.x,box.max.y,box.max.z)));
     this.enemy.visible = false;
+    if(encounter.model){
+      this.enemy.material.visible=false;
+      encounter.model.position.y=-0.9;
+      this.enemy.add(encounter.model);
+    }
     scene.add(this.enemy);
   }
 
@@ -28,16 +41,22 @@ export class ArenaCombat {
     this.enemy.visible = false;
   }
 
+  get cutterSwing():number {
+    return Math.sin(Math.PI*Math.min(1,Math.max(0,this.swing)/TUNABLES.weapons.cutter.interval));
+  }
+
   update(dt:number, player:Vec3, eye:number, yaw:number, pitch:number, playing:boolean, attack:boolean, extract:boolean, resources:ResourceSystem):void {
     const melee = TUNABLES.enemies.melee;
     const cutter = TUNABLES.weapons.cutter;
     this.swing -= dt;
     this.bite -= dt;
-    if (this.hp <= 0) {
+    const fighting = player.z >= (this.encounter.chaseLimitZ ?? -Infinity);
+    if (fighting && this.hp <= 0) {
       this.nextSpawn -= dt;
       if (this.nextSpawn <= 0) {
         this.hp = melee.hp;
-        this.enemy.position.set(0, 0.9, 13);
+        const spawn=this.encounter.spawn;
+        this.enemy.position.set(spawn.x,spawn.y+0.9,spawn.z);
         this.enemy.visible = true;
         this.bite = melee.attackInterval;
       }
@@ -54,7 +73,7 @@ export class ArenaCombat {
       const direction = new Vector3(-Math.sin(yaw)*Math.cos(pitch),Math.sin(pitch),-Math.cos(yaw)*Math.cos(pitch));
       const ray = new Ray(origin,direction);
       const hit = ray.intersectBox(new Box3().setFromObject(this.enemy),new Vector3());
-      if (hit && hit.distanceTo(origin)<=cutter.reach && !this.blocked(ray,hit.distanceTo(origin))) {
+      if (fighting && this.hp>0 && hit && hit.distanceTo(origin)<=cutter.reach && !this.blocked(ray,hit.distanceTo(origin))) {
         this.hp -= cutter.damage;
         if (this.hp <= 0) {
           this.enemy.visible = false;
@@ -64,16 +83,17 @@ export class ArenaCombat {
         } else this.toast('커터칼 명중');
       } else this.toast('커터칼 휘두르기');
     }
-    if (this.hp > 0) {
+    if (fighting && this.hp > 0) {
       const p = this.enemy.position;
       const dx=player.x-p.x, dz=player.z-p.z, distance=Math.hypot(dx,dz);
+      if(this.encounter.model)this.encounter.model.rotation.y=Math.atan2(dx,dz);
       if (distance > 1.25) {
         const step = Math.min(distance-1.25,melee.speed*dt)/distance;
-        const {position} = this.world.move({x:p.x,y:0,z:p.z},{x:dx*step,y:0,z:dz*step},1.8,false);
+        const {position} = this.world.move({x:p.x,y:p.y-0.9,z:p.z},{x:dx*step,y:0,z:dz*step},1.8,false);
         p.set(position.x,position.y+0.9,position.z);
       }
-      if (distance <= melee.attackRange && player.y < 1.4 && this.bite <= 0) {
-        const origin = new Vector3(p.x,1,p.z);
+      if (distance <= melee.attackRange && Math.abs(player.y-(p.y-0.9)) < 1.4 && this.bite <= 0) {
+        const origin = new Vector3(p.x,p.y+0.10,p.z);
         const delta = new Vector3(player.x,player.y+0.9,player.z).sub(origin);
         if (!this.blocked(new Ray(origin,delta.clone().normalize()),delta.length())) {
           resources.applyDelta({hp:-melee.damage});
@@ -102,6 +122,7 @@ export class ArenaCombat {
 
   dispose():void {
     this.enemy.removeFromParent();
+    if(this.encounter.model)disposeGroup(this.encounter.model);
     this.enemy.geometry.dispose();
     this.enemy.material.dispose();
   }
