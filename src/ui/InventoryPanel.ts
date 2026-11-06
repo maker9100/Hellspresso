@@ -2,10 +2,12 @@ import { RULES } from '../config/rules';
 import { TUNABLES } from '../config/tunables';
 import { BAG, EQUIPMENT, ITEMS, footprint } from '../core/Inventory';
 import type { BagPlacement, EquipmentId, Inventory, ItemId } from '../core/Inventory';
+import { RECIPES, isHealing, isStackable, isWeapon, slotFor } from '../core/items';
+import type { ExtractId, HealingId } from '../core/items';
 import './inventory.css';
 
-const SLOT_LABELS: Record<EquipmentId, string> = { cutter: '근접 무기', extractor: '생존 장비' };
-const ICONS: Record<ItemId, string> = {
+const SLOT_LABELS: Record<EquipmentId, string> = { cutter: '무기', extractor: '생존 장비' };
+const ICONS: Partial<Record<ItemId, string>> = {
   cutter: '<path fill="#c5c7bc" d="M38 23h19l14 7-4 5H38z"/><path fill="#747870" d="m45 23 3 12h2l-3-12zm10 0 3 12h2l-3-12z"/><path fill="#b78043" d="M10 20h33l4 6v10l-4 5H10l-5-5V25z"/><path fill="#372b22" d="M12 29h19v7H12zm22-4h8v8h-8z"/>',
   extractor: '<path fill="#7a7870" d="M10 16h38l9 7v15l-6 5H10z"/><path fill="#a7967b" d="M52 25h18v11H52z"/><path fill="#434742" d="M9 20h42v17H9zm11 18h18l-5 15H19z"/><path fill="#b54f3d" d="M16 23h23v10H16z"/><path fill="#f2b287" d="M21 26h12v2H21z"/><path fill="#6c6b60" d="M4 20h8v17H4z"/>',
   essence: '<path fill="#bebbb1" d="M31 7h14v8l5 6v23l-5 5H31l-5-5V21l5-6z"/><path fill="#9e3930" d="M30 25h16v16l-3 4H33l-3-4z"/><path fill="#e19a76" d="M32 27h3v12h-3z"/><path fill="#59594f" d="M30 6h16v9H30z"/>',
@@ -25,7 +27,7 @@ interface Drag {
 }
 
 function icon(id: ItemId): string {
-  return `<svg viewBox="0 0 76 56" aria-hidden="true" focusable="false">${ICONS[id]}</svg>`;
+  return `<svg viewBox="0 0 76 56" aria-hidden="true" focusable="false">${ICONS[id] ?? (isWeapon(id) ? '<path fill="#94b4b6" d="M8 20h58v10H40l-8 14H20l5-14H8z"/>' : isHealing(id) ? '<path fill="#a4bf8a" d="M21 13h31v30H21z"/><path stroke="#223422" stroke-width="4" d="M29 28h15m-7-7v14"/>' : '<path fill="#b99b74" d="m18 22 21-9 20 9v18l-20 9-21-9z"/>')}</svg>`;
 }
 
 function rectStyle(element: HTMLElement, placement: BagPlacement, id: ItemId): void {
@@ -59,7 +61,7 @@ export class InventoryPanel {
   private drag: Drag | undefined;
   private blockClickUntil = 0;
 
-  constructor(private readonly inventory: Inventory, private readonly callbacks: { resume: () => void; extract: () => void }) {
+  constructor(private readonly inventory: Inventory, private readonly callbacks: { resume: () => void; extract: (id:ExtractId) => void; heal:(id:HealingId)=>void; drop:(id:ItemId)=>void }) {
     this.root.className = 'inventory-board';
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
@@ -96,12 +98,15 @@ export class InventoryPanel {
         <div data-inventory-info class="inventory-info"></div>
         <div class="inventory-actions">
           <button type="button" data-inventory-action="gear" hidden></button>
-          <button type="button" data-inventory-action="extract" hidden>정수 추출</button>
+          <button type="button" data-inventory-action="extract" hidden>추출</button>
+          <button type="button" data-inventory-action="heal" hidden>사용</button>
+          <button type="button" data-inventory-action="drop" hidden>버리기</button>
           <button type="button" data-inventory-action="rotate" disabled>90° 회전 <kbd>R</kbd></button>
           <button type="button" data-inventory-action="cancel" disabled>선택 취소</button>
         </div>
         <p class="inventory-status" data-inventory-status role="status"></p>
       </div>
+      <details class="inventory-recipes"><summary>무기 제작</summary><div data-recipes></div></details>
       <footer class="inventory-footer"><b>● 실시간</b> 인벤토리를 보는 동안에도 CAF가 줄어들고 적은 움직인다.</footer>`;
     const get = <T extends HTMLElement>(selector: string): T => {
       const element = this.root.querySelector<T>(selector);
@@ -210,14 +215,14 @@ export class InventoryPanel {
       ? (document.activeElement as HTMLElement).dataset['item'] : undefined;
     for (const id of EQUIPMENT) {
       const button = this.slots[id];
-      const equipped = this.inventory.isEquipped(id);
-      if (equipped) button.dataset['item'] = id;
+      const equipped = this.inventory.equipped(id)?.id;
+      if (equipped) button.dataset['item'] = equipped;
       else delete button.dataset['item'];
       button.classList.toggle('inventory-empty-slot', !equipped);
-      button.setAttribute('aria-label', `${SLOT_LABELS[id]} · ${equipped ? ITEMS[id].name : '비어 있음'}`);
+      button.setAttribute('aria-label', `${SLOT_LABELS[id]} · ${equipped ? ITEMS[equipped].name : '비어 있음'}`);
       button.innerHTML = `<span class="inventory-slot-label">${SLOT_LABELS[id]}</span>
-        ${equipped ? icon(id) : '<span class="inventory-slot-empty-mark" aria-hidden="true">+</span>'}
-        <b>${equipped ? ITEMS[id].name : '비어 있음'}</b>`;
+        ${equipped ? icon(equipped) : '<span class="inventory-slot-empty-mark" aria-hidden="true">+</span>'}
+        <b>${equipped ? ITEMS[equipped].name : '비어 있음'}</b>`;
     }
     const tiles: HTMLButtonElement[] = [];
     let used = 0;
@@ -232,12 +237,16 @@ export class InventoryPanel {
       tile.dataset['rotated'] = String(placement.rotated);
       tile.setAttribute('aria-label', `${ITEMS[id].name} ${count}개 · ${width}×${height}칸`);
       tile.innerHTML = `<span class="inventory-tile-content">${icon(id)}
-        ${id === 'essence' ? `<b class="inventory-quantity">${count}</b>` : `<b class="inventory-tile-label">${ITEMS[id].name}</b>`}
+        ${isStackable(id) ? `<b class="inventory-quantity">${count}</b>` : ''}<b class="inventory-tile-label">${ITEMS[id].name}</b>
       </span>`;
       rectStyle(tile, placement, id);
       tiles.push(tile);
     }
     this.cards.replaceChildren(...tiles);
+    this.root.querySelector('[data-recipes]')!.innerHTML=RECIPES.map((recipe,index)=>{
+      const ingredients=recipe.options.map(option=>option.map(({id,count})=>`${ITEMS[id].name} ${this.inventory.count(id)}/${count}`).join(' · ')).join(' 또는 ');
+      return `<div><span><b>${ITEMS[recipe.id].name} ×${recipe.output}${recipe.provisional?' · 임시':''}</b><small>${ingredients}</small></span><button type="button" data-recipe="${index}" ${this.inventory.canCraft(recipe)?'':'disabled'}>제작</button></div>`;
+    }).join('');
     this.capacity.textContent = `${used} / ${BAG.columns * BAG.rows}칸`;
     if (focus) this.root.querySelector<HTMLButtonElement>(`[data-item="${focus}"]`)?.focus({ preventScroll: true });
     this.markSelected();
@@ -259,8 +268,11 @@ export class InventoryPanel {
     const item = id ? this.inventory.get(id) : undefined;
     this.rotateButton.disabled = !id || ITEMS[id].width === ITEMS[id].height;
     this.cancelButton.disabled = !item;
-    this.gearButton.hidden = !item || id === 'essence';
-    this.extractButton.hidden = id !== 'essence' || !item;
+    this.gearButton.hidden = !item || !id || !slotFor(id);
+    const extract = id==='essence'||id==='heart' ? id : undefined;
+    this.extractButton.hidden = !extract || !item;
+    this.root.querySelector<HTMLButtonElement>('[data-inventory-action="heal"]')!.hidden = !item || !id || !isHealing(id);
+    this.root.querySelector<HTMLButtonElement>('[data-inventory-action="drop"]')!.hidden = !item;
     if (!id || !item) {
       this.info.innerHTML = '<b>아이템을 선택하세요</b><small>이름 · 크기 · 수량을 확인할 수 있어.</small>';
       return;
@@ -269,11 +281,13 @@ export class InventoryPanel {
     const itemLocation = item.placement ? '가방' : '장착 중';
     const pending = this.rotated !== (item.placement?.rotated ?? false) ? ' · 회전 미리보기' : '';
     this.info.innerHTML = `<b>${ITEMS[id].name}</b><small>${itemLocation} · ${width}×${height}칸 · ${item.count}개${pending}</small>
-      <small>${ITEMS[id].description}</small>`;
+      <small>${isHealing(id)?`HP +${RULES.healing[id]} · `:''}${ITEMS[id].description}</small>`;
     this.gearButton.textContent = item.placement ? '장착' : '가방에 넣기';
-    this.extractButton.disabled = !this.inventory.isEquipped('extractor') || item.count < RULES.extraction.essence.input;
-    this.extractButton.title = this.extractButton.disabled
-      ? `정수 추출기를 장착하고 정수 ${RULES.extraction.essence.input}개가 필요하다.` : '';
+    if(extract){
+      const rule=RULES.extraction[extract];
+      this.extractButton.textContent=`${rule.input}개 추출 · CAF +${rule.caffeine}`;
+      this.extractButton.disabled=!this.inventory.isEquipped('extractor')||item.count<rule.input;
+    }
   }
 
   private select(id: ItemId): void {
@@ -300,12 +314,12 @@ export class InventoryPanel {
     const id = this.selected;
     if (!id) return;
     if (target.kind === 'slot') {
-      if (target.id !== id) {
+      if (target.id !== slotFor(id)) {
         this.setStatus('이 아이템은 해당 슬롯에 장착할 수 없다.', true);
         return;
       }
-      this.inventory.equip(target.id);
-      this.finishMove('장비를 장착했다.');
+      if(this.inventory.equip(id))this.finishMove('장비를 장착했다.');
+      else this.setStatus('가방에 빈 공간이 부족하다.',true);
       return;
     }
     if (!this.inventory.place(id, { column: target.column, row: target.row, rotated: this.rotated })) {
@@ -327,13 +341,13 @@ export class InventoryPanel {
 
   private toggleGear(): void {
     const id = this.selected;
-    if (!id || id === 'essence') return;
+    if (!id || !slotFor(id)) return;
     if (this.inventory.isEquipped(id)) {
       if (this.inventory.stow(id, this.rotated)) this.finishMove('가방에 넣었다.');
       else this.setStatus('가방에 빈 공간이 부족하다.', true);
     } else {
-      this.inventory.equip(id);
-      this.finishMove('장비를 장착했다.');
+      if(this.inventory.equip(id))this.finishMove('장비를 장착했다.');
+      else this.setStatus('가방에 빈 공간이 부족하다.',true);
     }
   }
 
@@ -367,8 +381,8 @@ export class InventoryPanel {
     const id = this.selected;
     for (const slot of EQUIPMENT) {
       const aimed = id !== undefined && target?.kind === 'slot' && target.id === slot;
-      this.slots[slot].classList.toggle('inventory-drop-ok', aimed && id === slot);
-      this.slots[slot].classList.toggle('inventory-drop-no', aimed && id !== slot);
+      this.slots[slot].classList.toggle('inventory-drop-ok', aimed && slotFor(id!) === slot);
+      this.slots[slot].classList.toggle('inventory-drop-no', aimed && slotFor(id!) !== slot);
     }
     if (!id || target?.kind !== 'bag') {
       this.preview.hidden = true;
@@ -409,11 +423,24 @@ export class InventoryPanel {
     switch (button.dataset['inventoryAction']) {
       case 'resume': this.callbacks.resume(); return;
       case 'gear': this.toggleGear(); return;
-      case 'extract': this.callbacks.extract(); return;
+      case 'extract':
+        if(this.selected==='essence'||this.selected==='heart')this.callbacks.extract(this.selected);
+        return;
+      case 'heal': if(this.selected&&isHealing(this.selected))this.callbacks.heal(this.selected); return;
+      case 'drop': if(this.selected){this.callbacks.drop(this.selected);this.clearSelection();} return;
       case 'rotate': this.rotate(); return;
       case 'cancel': this.clearSelection(); return;
     }
+    if(button.dataset['recipe']!==undefined){
+      const recipe=RECIPES[Number(button.dataset['recipe'])];
+      if(recipe&&this.inventory.craft(recipe)){this.select(recipe.id);this.finishMove('제작했다.');}
+      return;
+    }
     const id = button.dataset['item'] as ItemId | undefined;
+    const targetSlot=button.dataset['slot'] as EquipmentId|undefined;
+    if(targetSlot&&this.selected&&this.selected!==id&&slotFor(this.selected)===targetSlot){
+      this.apply({kind:'slot',id:targetSlot});return;
+    }
     if (id) {
       this.select(id);
       return;

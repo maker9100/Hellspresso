@@ -242,3 +242,14 @@
   .inventory-details { grid-template-columns: minmax(0, 1fr); margin-top: 8px; }
   .inventory-status { min-height: 0; }
 }
+
+.inventory-recipes{margin-top:12px;border:1px solid #77574366;padding:8px 12px;color:#e7d7c5}
+.inventory-recipes summary{cursor:pointer;font-weight:700}
+.inventory-recipes [data-recipes]>div{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px solid #77574355}
+.inventory-recipes b,.inventory-recipes small{display:block}
+.inventory-recipes small{color:#b59d89;margin-top:4px}
+.inventory-recipes button{padding:7px 12px;background:#30211d;color:inherit;border:1px solid #8b6346}
+.inventory-recipes button:disabled{opacity:.42}
+.inventory-tile-label{left:2px;overflow:hidden;text-overflow:ellipsis}
+.inventory-quantity{bottom:auto;top:2px}
+.inventory-recipes button{width:auto;flex-shrink:0}

@@ -1,5 +1,6 @@
 type MoveAction = 'jump' | 'dash' | 'slide';
-type Action = MoveAction | 'pause' | 'inventory' | 'attack' | 'extract';
+type ButtonAction = 'pause' | 'inventory' | 'attack' | 'extract' | 'pickup' | 'heal' | 'reload' | 'map';
+type Action = MoveAction | ButtonAction;
 
 export class TouchControls {
   private readonly root = document.createElement('div');
@@ -16,7 +17,7 @@ export class TouchControls {
   private forward = 0;
   private readonly pressed = new Set<MoveAction>();
 
-  constructor(parent: HTMLElement, onAction: (action: 'pause' | 'inventory' | 'attack' | 'extract') => void) {
+  constructor(parent: HTMLElement, onAction: (action: ButtonAction) => void) {
     this.root.className = 'touch-controls';
     this.root.hidden = true;
     this.root.innerHTML = `
@@ -28,8 +29,12 @@ export class TouchControls {
         <button type="button" data-action="jump">점프</button>
         <button type="button" data-action="attack">공격</button>
         <button type="button" data-action="extract">추출</button>
+        <button type="button" data-action="pickup">줍기</button>
+        <button type="button" data-action="reload">장전</button>
+        <button type="button" data-action="heal">회복</button>
       </div>
       <div class="touch-menu">
+        <button type="button" data-action="map">지도</button>
         <button type="button" data-action="inventory">소지품</button>
         <button type="button" data-action="pause">정지</button>
       </div>`;
@@ -70,7 +75,7 @@ export class TouchControls {
     }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('button')) {
       const action = button.dataset['action'] as Action;
-      if (action === 'pause' || action === 'inventory' || action === 'attack' || action === 'extract') {
+      if (action !== 'jump' && action !== 'dash' && action !== 'slide') {
         button.addEventListener('click', () => onAction(action), options);
       } else {
         button.addEventListener('pointerdown', () => this.pressed.add(action), options);
