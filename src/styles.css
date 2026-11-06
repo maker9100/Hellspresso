@@ -59,3 +59,21 @@ h2{font-size:31px;font-weight:800;margin:22px 0 14px;letter-spacing:-1px}h2>span
   user-select:none;
   -webkit-touch-callout:none;
 }
+
+#app[data-state="INTRO"]{touch-action:none;overscroll-behavior:none}
+#app[data-state="INTRO"] .opening-overlay,
+#app[data-state="INTRO"] .opening-overlay *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.overlay.opening-overlay{
+  align-items:flex-end;justify-content:space-between;gap:16px;
+  padding:max(24px,env(safe-area-inset-bottom)) max(24px,env(safe-area-inset-right));
+  background:linear-gradient(0deg,#110c0def 2%,#110c0d92 25%,transparent 55%);
+  backdrop-filter:none;
+}
+.opening-copy{max-width:620px;text-shadow:0 2px 7px #0b090a}
+.opening-copy h2{margin:.3em 0;font-size:clamp(22px,4vw,39px)}
+.opening-copy p{margin:.7em 0 0;color:#e4d5c0;font-size:clamp(13px,2vw,17px);min-height:1.4em}
+.opening-overlay>button{width:auto;min-width:120px;min-height:44px;white-space:nowrap;touch-action:manipulation}
+@media(max-width:560px){
+  .overlay.opening-overlay{padding:16px;flex-wrap:wrap;align-content:flex-end}
+  .opening-overlay>button{margin-left:auto}
+}
