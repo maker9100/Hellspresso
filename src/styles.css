@@ -96,3 +96,13 @@ h2{font-size:31px;font-weight:800;margin:22px 0 14px;letter-spacing:-1px}h2>span
   .floor-map{top:120px;right:12px;width:109px}
   .map-plan{height:80px}
 }
+.lift-shade{position:absolute;inset:0;background:#100d12;opacity:0;z-index:7}
+.lift-hint{position:absolute;bottom:82px;left:50%;transform:translateX(-50%);padding:6px 10px;color:#a8e1da;background:#151d20d9;border:1px solid #6c9695;font:12px monospace}
+.touch-lift{position:absolute;bottom:max(30px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;gap:6px}
+.touch-lift button{border-color:#83b8af}
+@media (pointer:coarse){.lift-hint{display:none}.touch-lift{bottom:166px}}
+.train-health{position:absolute;top:18px;left:50%;transform:translateX(-50%);width:clamp(105px,25vw,330px);display:grid;gap:5px;text-align:center;color:#ffb5ac;font:700 10px monospace;letter-spacing:2px}
+.train-health progress{width:100%;height:7px;accent-color:#bc374b}
+.warp-tint{position:absolute;inset:0;opacity:0;box-shadow:inset 0 0 180px #9a3cc9;background:#6529a737;pointer-events:none}
+.map-layout{position:absolute;inset:0;width:100%;height:100%;fill:#b09375}
+.floor-map:has(.map-layout rect) .map-fixtures{display:none}
