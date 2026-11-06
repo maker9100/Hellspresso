@@ -84,6 +84,17 @@ export function officeMaterials() {
   };
 }
 
+export function routeMaterials(){
+  const mapped=(kind:Surface,color:number,roughness:number,metalness=0)=>
+    new MeshStandardMaterial({map:surface(kind),color,roughness,metalness});
+  return {
+    concrete:mapped('concrete',0xd4c5bd,.91),
+    plaster:mapped('plaster',0xbba5a0,.94),
+    carpet:mapped('carpet',0xe5d3bd,1),
+    laminate:mapped('laminate',0xf2d9ba,.74),
+  };
+}
+
 export function contactShadow() {
   const map = paintedTexture(64, 64, ctx => {
     const fade = ctx.createRadialGradient(32,32,5,32,32,31);
