@@ -19,6 +19,7 @@ function fits(contents:Contents,id:ItemId,placement:BagPlacement):boolean {
   const {column,row,rotated}=placement;
   const {width,height}=footprint(id,rotated);
   if(!Number.isInteger(column)||!Number.isInteger(row)||column<0||row<0||column+width>BAG.columns||row+height>BAG.rows)return false;
+  if(id!=='essence'&&column+width===BAG.columns&&row+height===BAG.rows)return false;
   for(const item of contents.values()){
     const other=item.placement;
     if(item.id===id||!other)continue;
@@ -46,7 +47,7 @@ function add(contents:Contents,id:ItemId,count:number):boolean{
     contents.set(id,{...existing,count:existing.count+count});
     return true;
   }
-  const placement=firstFree(contents,id);
+  const placement=id==='essence'?{column:BAG.columns-1,row:BAG.rows-1,rotated:false}:firstFree(contents,id);
   if(!placement)return false;
   contents.set(id,{id,count,placement});
   return true;
