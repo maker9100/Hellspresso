@@ -4,10 +4,11 @@ import {
 } from 'three';
 import type { Material } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { Aabb, Vec3 } from '../core/types';
+import type { Aabb } from '../core/types';
 import { createOfficeDemon } from './officeDemon';
 import { cityWindowTexture, contactShadow, officeMaterials, signTexture } from './officeMaterials';
 import { disposeGroup } from './procedural';
+import { addOfficeRoute } from './officeRoute';
 
 type Point = readonly [number, number, number];
 const stair = { x:10.5, width:3.85, startZ:-16.25, depth:0.36, rise:0.2, count:18 };
@@ -18,8 +19,6 @@ export const officePlan = {
   enemySpawn:{x:0,y:0,z:4.1},
   stairZ:stair.startZ,
   landingY,
-  reachedLanding: (p:Vec3) =>
-    Math.abs(p.x-stair.x)<stair.width/2 && p.z<-23.85 && p.z>landingEnd && Math.abs(p.y-landingY)<0.13,
 };
 
 const pools: Point[] = [];
@@ -270,10 +269,9 @@ export function createOffice() {
   const stairsEnd=stair.startZ-stair.depth*stair.count;
   box([stair.x,landingY-0.23,(stairsEnd+landingEnd)/2],
     [stair.width,0.46,stairsEnd-landingEnd],material.concrete,true);
-  box([stair.x,-0.29,landingEnd-0.12],[stair.width+0.32,7.29,0.24],material.plaster,true);
+
   box([stair.x,3.66,-20.75],[stair.width,0.22,9.0],material.ceiling,true);
-  box([stair.x,landingY+1.12,landingEnd+0.06],[1.82,2.24,0.12],material.greenPaint);
-  box([stair.x,landingY+1.05,landingEnd+0.14],[1.35,0.085,0.09],material.steel);
+
   sign('04 / OFFICE','UPPER OFFICE LANDING',[stair.x,landingY+2.72,landingEnd+0.14],2.66,0.75);
   box([stair.x,landingY+2.30,landingEnd+0.21],[0.66,0.10,0.12],material.guide);
   box([stair.x,landingY+0.011,-24.31],[1.64,0.018,0.045],material.guide);
@@ -290,12 +288,14 @@ export function createOffice() {
     root.add(mesh);
   }
 
+  const animateRoute=addOfficeRoute(root,colliders);
   const openingDemon=createOfficeDemon();
   openingDemon.visible=false;
   root.add(openingDemon);
   return {
     root,colliders,openingDemon,spawn:officePlan.spawn,
     animate(seconds:number):void{
+      animateRoute(seconds);
       for(const pulse of pulses){
         const t=(seconds*0.63+pulse.phase)%1;
         pulse.mesh.position.z=pulse.start+(pulse.end-pulse.start)*t;
