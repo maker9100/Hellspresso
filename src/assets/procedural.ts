@@ -1,4 +1,4 @@
-import { BoxGeometry, BufferGeometry, CanvasTexture, CylinderGeometry, Group, LineSegments, Material, Mesh, MeshBasicMaterial, MeshStandardMaterial, PlaneGeometry, SRGBColorSpace, Texture } from 'three';
+import { BoxGeometry, BufferGeometry, CanvasTexture, CylinderGeometry, ExtrudeGeometry, Group, LineSegments, Material, Mesh, MeshBasicMaterial, MeshStandardMaterial, PlaneGeometry, Shape, SRGBColorSpace, Texture } from 'three';
 import { TUNABLES } from '../config/tunables';
 import type { Aabb, Vec3 } from '../core/types';
 
@@ -62,9 +62,44 @@ export function createArena():ArenaAsset {
 export function createCutter():Group {
   const c=TUNABLES.prototype.cutterModel;
   const group=new Group();
-  const handle=new Mesh(new BoxGeometry(...c.handle),new MeshStandardMaterial({color:TUNABLES.prototype.colors.amber,roughness:1}));
-  const blade=new Mesh(new BoxGeometry(...c.blade),new MeshStandardMaterial({color:TUNABLES.prototype.colors.paper,metalness:1,roughness:TUNABLES.prototype.bladeRoughness}));
-  blade.position.y=(c.handle[1]+c.blade[1])/2;
-  group.add(handle,blade);group.position.set(...c.position);group.rotation.set(...c.rotation);
+  const shell=new MeshStandardMaterial({color:0xb9722c,metalness:0.25,roughness:0.72});
+  const rubber=new MeshStandardMaterial({color:0x282829,roughness:0.95});
+  const steel=new MeshStandardMaterial({color:0x9b9b94,metalness:0.42,roughness:0.52});
+  const edge=new MeshStandardMaterial({color:0xc9c8be,metalness:0.23,roughness:0.38});
+  const darkSteel=new MeshStandardMaterial({color:0x545652,metalness:0.4,roughness:0.8});
+
+  function profile(points: readonly (readonly [number,number])[], thickness:number, material:MeshStandardMaterial, bevel=0):void{
+    const shape=new Shape();
+    for(const [i,[x,y]] of points.entries()){
+      if(i===0)shape.moveTo(x,y);
+      else shape.lineTo(x,y);
+    }
+    shape.closePath();
+    const geometry=new ExtrudeGeometry(shape,{depth:thickness,bevelEnabled:bevel>0,
+      bevelSegments:1,bevelSize:bevel,bevelThickness:bevel});
+    geometry.translate(0,0,-thickness/2);
+    group.add(new Mesh(geometry,material));
+  }
+
+  function detail(x:number,y:number,z:number,w:number,h:number,d:number,material:MeshStandardMaterial,angle=0):void{
+    const mesh=new Mesh(new BoxGeometry(w,h,d),material);
+    mesh.position.set(x,y,z);
+    mesh.rotation.z=angle;
+    group.add(mesh);
+  }
+
+  profile([[-0.029,-0.151],[0.027,-0.151],[0.039,-0.126],[0.039,0.123],[0.024,0.15],
+    [-0.027,0.15],[-0.038,0.119],[-0.04,-0.11]],0.045,shell,0.003);
+  profile([[-0.022,0.131],[0.025,0.131],[0.025,0.246],[-0.022,0.282]],0.008,steel);
+  profile([[-0.024,0.139],[-0.018,0.139],[-0.018,0.278],[-0.024,0.284]],0.009,edge);
+  detail(0,0.065,0.026,0.023,0.132,0.008,darkSteel);
+  detail(0,0.067,0.035,0.033,0.033,0.013,rubber);
+  for(let i=0;i<3;i++)detail(0,0.058+i*0.009,0.043,0.024,0.0025,0.003,steel);
+  for(let i=0;i<5;i++)detail(0.004,-0.116+i*0.016,0.026,0.058,0.007,0.009,rubber,-0.13);
+  for(let i=0;i<3;i++)detail(0.001,0.17+i*0.029,0.005,0.043,0.0012,0.001,darkSteel,-0.56);
+  detail(0,-0.141,0,0.061,0.021,0.049,rubber);
+  group.scale.setScalar(0.80);
+  group.position.set(...c.position);
+  group.rotation.set(...c.rotation);
   return group;
 }
