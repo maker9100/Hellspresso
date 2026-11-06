@@ -1,6 +1,8 @@
 import { ACESFilmicToneMapping, Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
 import { assets } from '../assets/registry';
+import { FLOORS, MAP_LOOT, floorAt, inSafeZone } from '../assets/officeRoute';
 import { officePlan } from '../assets/office';
+import { createWeaponViews } from '../assets/weaponView';
 import { createOfficeDemon } from '../assets/officeDemon';
 import { disposeGroup } from '../assets/procedural';
 import { TUNABLES } from '../config/tunables';
@@ -16,7 +18,10 @@ import { FixedStepLoop } from './FixedStepLoop';
 import { GameStateMachine } from './GameStateMachine';
 import type { GameState } from './GameStateMachine';
 import { ArenaCombat } from './ArenaCombat';
+import type { CombatActions } from './ArenaCombat';
+import { Loot } from './Loot';
 import { Input } from './Input';
+import { Inventory } from './Inventory';
 import { TouchControls } from '../ui/TouchControls';
 import { PointerLock } from './PointerLock';
 import { NEUTRAL_INTENT } from './types';
@@ -31,6 +36,7 @@ export class Game {
   private readonly machine=new GameStateMachine();
   private readonly arena=assets.arena();
   private readonly cutter=assets.cutter();
+  private readonly weaponViews=createWeaponViews();
   private readonly collision=new CollisionWorld(this.arena.colliders);
   private readonly sun=new DirectionalLight(0xffe0be,1.85);
   private readonly events=new AbortController();
@@ -41,8 +47,12 @@ export class Game {
   private readonly loop:FixedStepLoop;
   private readonly touch:TouchControls;
   private readonly combat:ArenaCombat;
-  private attack=false;
-  private extract=false;
+  private readonly inventory=new Inventory();
+  private readonly loot=new Loot(this.scene,MAP_LOOT);
+  private readonly holySeen=new Set<number>();
+  private actions:CombatActions={};
+  private pick=false;
+  private map=false;
   private readonly touchMode=matchMedia('(pointer: coarse)').matches;
   private resources=new ResourceSystem();
   private movement=new Movement(this.collision,this.arena.spawn);
@@ -69,7 +79,7 @@ export class Game {
     const extent=TUNABLES.prototype.shadowExtent;
     Object.assign(this.sun.shadow.camera,{left:-extent,right:extent,top:extent,bottom:-extent,far:extent*3});
     this.scene.add(this.sun);
-    this.camera.rotation.order='YXZ';this.camera.add(this.cutter);this.scene.add(this.camera);
+    this.camera.rotation.order='YXZ';this.camera.add(this.cutter,...this.weaponViews.values());this.scene.add(this.camera);
     this.hud=new HUD(parent,new URLSearchParams(location.search).get('debug')==='1');
     this.pointer=new PointerLock(this.renderer.domElement,locked=>{
       if(this.touchMode)return;
@@ -77,19 +87,40 @@ export class Game {
       else if(!locked && this.machine.current==='PLAYING')this.change('PAUSED');
     },message=>this.hud.toast(message));
     this.input=new Input(()=>this.settings.value,()=>this.pointer.locked && this.machine.current==='PLAYING');
-    this.combat=new ArenaCombat(this.scene,this.collision,message=>this.hud.toast(message),{
-      spawn:officePlan.enemySpawn, chaseLimitZ:officePlan.stairZ, model:createOfficeDemon(),
-    });
+    this.combat=new ArenaCombat(this.scene,this.collision,message=>{
+      if(this.machine.current==='INVENTORY')this.menu.inventoryNotice(message);
+
+    },{
+      spawn:officePlan.enemySpawn, model:createOfficeDemon(), stage:true,
+      drop:(id,count,position)=>this.loot.drop(id,count,position), flash:type=>this.hud.flash(type),
+    },this.inventory);
     this.renderer.domElement.addEventListener('pointerdown',event=>{
-      if(event.button===0 && this.pointer.locked && this.machine.current==='PLAYING')this.attack=true;
+      if(event.button===0 && this.pointer.locked && this.machine.current==='PLAYING')this.actions.attack=true;
     },{signal:this.events.signal});
     this.touch=new TouchControls(parent,action=>{
       if(this.machine.current!=='PLAYING')return;
-      if(action==='attack'){this.attack=true;return;}
-      if(action==='extract'){this.extract=true;return;}
+      if(action==='attack'){this.actions.attack=true;return;}
+      if(action==='extract'){this.requestExtraction();return;}
+      if(action==='pickup'){this.pick=true;return;}
+      if(action==='heal'){this.actions.heal='quick';return;}
+      if(action==='reload'){this.actions.reload=true;return;}
+      if(action==='map'){this.map=!this.map;return;}
       this.change(action==='pause'?'PAUSED':'INVENTORY');
     });
-    this.menu=new Menu(parent,this.settings,{start:()=>this.start(),skipOpening:()=>this.beginEscape(),resume:()=>this.resume(),menu:()=>this.change('MENU'),changed:()=>this.applySettings(),toast:message=>this.hud.toast(message)});
+    this.menu=new Menu(parent,this.settings,this.inventory,{
+      start:()=>this.start(),
+      skipOpening:()=>this.beginEscape(),
+      resume:()=>this.resume(),
+      menu:()=>this.change('MENU'),
+      changed:()=>this.applySettings(),
+      toast:message=>this.hud.toast(message),
+      extract:id=>{this.actions.extract=id;},
+      heal:id=>{this.actions.heal=id;},
+      drop:id=>{
+        const count=this.inventory.count(id);
+        if(count&&this.inventory.spend(id,count))this.loot.drop(id,count,this.movement.position);
+      },
+    });
     this.loop=new FixedStepLoop(dt=>this.update(dt),delta=>this.render(delta));
     document.addEventListener('keydown',this.keydown,{signal:this.events.signal});
     const preventBrowserGesture = (event:Event):void => {
@@ -114,7 +145,7 @@ export class Game {
   private start():void{
     this.change('LOADING');
     this.resources=new ResourceSystem();this.movement=new Movement(this.collision,this.arena.spawn);
-    this.combat.reset();
+    this.combat.reset();this.loot.reset();this.holySeen.clear();this.map=false;
     this.elapsed=0;this.caffeineSpent=0;this.yaw=0;this.pitch=0;this.loop.reset();
     this.openingTime=0;
     this.change('INTRO');
@@ -126,7 +157,6 @@ export class Game {
     this.poseOpeningDemon();
     this.change('PAUSED');
     this.resume();
-    this.hud.toast('사무실을 가로질러 오른쪽 끝 비상계단으로.');
   }
 
   private resume():void{
@@ -145,7 +175,7 @@ export class Game {
     }
     this.loop?.stepper.setRunning(this.machine.simulating);
     this.input?.clear();
-    this.attack=false;this.extract=false;
+    this.actions={};this.pick=false;
     this.parent.dataset['state']=next;
     this.touch?.show(this.touchMode && next==='PLAYING');
     this.menu?.show(next,this.resources.cause);
@@ -162,8 +192,13 @@ export class Game {
       event.preventDefault();
       if(this.machine.current==='PLAYING')this.change('INVENTORY');
       else this.resume();
-    }else if(event.code===RULES.quickHealKey){this.hud.toast('회복 아이템이 없다.');}
-    else if(this.input.matches('extractor',event.code)){this.extract=this.machine.current==='PLAYING';}
+    }else if(this.machine.current==='PLAYING'){
+      if(event.code===RULES.quickHealKey)this.actions.heal='quick';
+      else if(this.input.matches('extractor',event.code))this.requestExtraction();
+      else if(this.input.matches('interact',event.code))this.pick=true;
+      else if(this.input.matches('reload',event.code))this.actions.reload=true;
+      else if(event.code==='KeyM')this.map=!this.map;
+    }
   };
 
   private update(dt:number):void{
@@ -172,20 +207,40 @@ export class Game {
       ? this.touchMode ? {...NEUTRAL_INTENT,...this.touch.intent()} : this.input.intent()
       : NEUTRAL_INTENT;
     this.movement.update(dt,intent,this.yaw,this.resources);
+    const p=this.movement.position;
+    const floor=floorAt(p), safe=inSafeZone(p,floor);
+    const current=this.resources.current;
+    if(safe&&!this.holySeen.has(floor)){
+      this.holySeen.add(floor);
+      this.resources.applyDelta({hp:RULES.resources.hpMax-current.hp,caffeine:Math.max(0,RULES.resources.caffeineBase-current.caffeine)});
+      this.hud.flash('heal');
+    }
     const before=this.resources.current.caffeine;
-    this.resources.advance(dt,false);
+    this.resources.advance(dt,safe);
     this.caffeineSpent+=before-this.resources.current.caffeine;
-    const playing=this.machine.current==='PLAYING';
-    if(!this.resources.cause)this.combat.update(dt,this.movement.position,this.movement.eyeHeight,
-      this.yaw,this.pitch,playing,this.attack,this.extract,this.resources);
-    this.attack=false;this.extract=false;
+    this.loot.update(dt,p);
+    if(this.pick&&this.loot.collect(p,this.inventory))this.hud.flash('pickup');
+    if(!this.resources.cause)this.combat.update(dt,p,this.movement.eyeHeight,
+      this.yaw,this.pitch,this.machine.simulating,this.actions,this.resources,safe);
+    this.actions={};this.pick=false;
     this.elapsed+=dt;this.resolveDeath();
-    if(this.machine.current==='PLAYING' && officePlan.reachedLanding(this.movement.position))this.change('ENDING');
+    if(this.machine.current==='PLAYING'&&p.z<-164)this.change('ENDING');
+  }
+
+  private requestExtraction():void{
+    this.actions.extract=this.inventory.essence>=RULES.extraction.essence.input?'essence':'heart';
   }
 
   private resolveDeath():void{if(this.resources.cause && this.machine.current!=='DEAD' && (this.machine.simulating||this.machine.current==='PAUSED'))this.change('DEAD');}
 
-  private snapshot(){return {state:this.machine.current,cause:this.resources.cause,resources:this.resources.current,position:{...this.movement.position},height:this.movement.height,grounded:this.movement.grounded,jumps:this.movement.jumps,mode:this.movement.mode,onStairs:this.movement.position.z<officePlan.stairZ,yaw:this.yaw,pitch:this.pitch,elapsed:this.elapsed,caffeineSpent:this.caffeineSpent,fps:this.fps};}
+  private snapshot(){
+    const p=this.movement.position, floor=floorAt(p), weapon=this.inventory.weapon;
+    return {state:this.machine.current,cause:this.resources.cause,resources:this.resources.current,position:{...p},
+      height:this.movement.height,grounded:this.movement.grounded,jumps:this.movement.jumps,mode:this.movement.mode,
+      cutterEquipped:weapon==='cutter',floor,onStairs:p.z<FLOORS[floor]!.end,map:this.map,weapon,
+      ammo:weapon?this.combat.ammoLabel(weapon):'',pickup:!!this.loot.nearest(p),safe:inSafeZone(p,floor),
+      yaw:this.yaw,pitch:this.pitch,elapsed:this.elapsed,caffeineSpent:this.caffeineSpent,fps:this.fps};
+  }
 
   private resize():void{
     const width=this.parent.clientWidth,height=this.parent.clientHeight;
@@ -243,19 +298,28 @@ export class Game {
       }
       this.camera.rotation.set(this.pitch,this.yaw,0,'YXZ');
       const p=this.movement.position;this.camera.position.set(p.x,p.y+this.movement.eyeHeight,p.z);
-      this.cutter.visible=this.machine.current!=='DEAD' && this.machine.current!=='ENDING';
+      this.cutter.visible=this.inventory.isEquipped('cutter') && this.machine.current!=='DEAD' && this.machine.current!=='ENDING';
       const c=TUNABLES.prototype.cutterModel;
       const swing=this.combat.cutterSwing;
       this.cutter.rotation.z=c.rotation[2]+swing*0.96;
       this.cutter.position.y=c.position[1]+Math.sin(this.elapsed*c.bobFrequency)*c.bobAmplitude*this.settings.value.screenShake+swing*0.042;
     }
-    this.hud.update(this.snapshot(),this.settings.value);
+    const snapshot=this.snapshot();
+    for(const [id,model] of this.weaponViews){
+      model.visible=id===snapshot.weapon&&this.machine.simulating;
+      if(model.visible){
+        model.position.y=-.24+this.combat.cutterSwing*.06;
+        model.rotation.z=-.24+this.combat.cutterSwing*.43;
+      }
+    }
+    this.hud.update(snapshot,this.settings.value);
+    this.menu.updateInventory(snapshot.resources.caffeine);
     this.renderer.render(this.scene,this.camera);
   }
 
   dispose():void{
-    this.events.abort();this.loop.dispose();this.input.dispose();this.pointer.dispose();this.menu.dispose();this.touch.dispose();this.combat.dispose();
-    this.arena.dispose();disposeGroup(this.cutter);this.sun.shadow.map?.dispose();this.renderer.dispose();
+    this.events.abort();this.loop.dispose();this.input.dispose();this.pointer.dispose();this.menu.dispose();this.touch.dispose();this.combat.dispose();this.loot.dispose();
+    this.arena.dispose();disposeGroup(this.cutter);for(const model of this.weaponViews.values())disposeGroup(model);this.sun.shadow.map?.dispose();this.renderer.dispose();
     this.parent.replaceChildren();
   }
 }
