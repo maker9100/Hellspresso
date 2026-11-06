@@ -1,10 +1,12 @@
 type MoveAction = 'jump' | 'dash' | 'slide';
-type ButtonAction = 'pause' | 'inventory' | 'attack' | 'extract' | 'pickup' | 'heal' | 'reload' | 'map';
+type ButtonAction = 'pause' | 'inventory' | 'attack' | 'extract' | 'pickup' | 'heal' | 'reload' | 'map' | 'lift-up' | 'lift-down';
 type Action = MoveAction | ButtonAction;
 
 export class TouchControls {
   private readonly root = document.createElement('div');
   private readonly events = new AbortController();
+  private readonly liftUp:HTMLButtonElement;
+  private readonly liftDown:HTMLButtonElement;
   private readonly stick: HTMLElement;
   private readonly knob: HTMLElement;
   private moveId: number | null = null;
@@ -33,11 +35,17 @@ export class TouchControls {
         <button type="button" data-action="reload">장전</button>
         <button type="button" data-action="heal">회복</button>
       </div>
+      <div class="touch-lift">
+        <button type="button" data-action="lift-up" hidden>위층 ↑</button>
+        <button type="button" data-action="lift-down" hidden>아래층 ↓</button>
+      </div>
       <div class="touch-menu">
         <button type="button" data-action="map">지도</button>
         <button type="button" data-action="inventory">소지품</button>
         <button type="button" data-action="pause">정지</button>
       </div>`;
+    this.liftUp=this.root.querySelector<HTMLButtonElement>('[data-action="lift-up"]')!;
+    this.liftDown=this.root.querySelector<HTMLButtonElement>('[data-action="lift-down"]')!;
     this.stick = this.root.querySelector<HTMLElement>('.touch-stick')!;
     this.knob = this.stick.firstElementChild as HTMLElement;
     const look = this.root.querySelector<HTMLElement>('.touch-look')!;
@@ -120,6 +128,11 @@ export class TouchControls {
     this.lookX = 0;
     this.lookY = 0;
     return result;
+  }
+
+  setLift(index:number,moving:boolean):void{
+    this.liftUp.hidden=index<1||moving;
+    this.liftDown.hidden=index<0||index>=4||moving;
   }
 
   show(visible: boolean): void {
