@@ -12,6 +12,7 @@ export interface Settings {
   showFps: boolean;
   subtitles: boolean;
   tutorial: boolean;
+  autoGuide: boolean;
   bindings: Record<Action,string[]>;
 }
 const STORAGE_KEY = 'hellspresso.settings.v1';
@@ -22,7 +23,7 @@ export function defaults(): Settings {
   for (const action of ACTIONS) bindings[action] = [...TUNABLES.keys[action]];
   return { sensitivity:TUNABLES.camera.sensitivity, renderScale:p.renderScale, shadows:p.shadows,
     effectsVolume:p.effectsVolume, musicVolume:p.musicVolume, screenShake:p.screenShake,
-    showFps:p.showFps, subtitles:p.subtitles, tutorial:p.tutorial, bindings };
+    showFps:p.showFps, subtitles:p.subtitles, tutorial:p.tutorial, autoGuide:true, bindings };
 }
 
 export function rebind(settings: Settings, action: Action, code: string): string | null {
@@ -44,7 +45,7 @@ export class SettingsStore {
       const saved = raw as Record<string,unknown>;
       for (const key of ['effectsVolume','musicVolume','screenShake'] as const)
         if (typeof saved[key]==='number' && Number.isFinite(saved[key]) && saved[key]>=0 && saved[key]<=1) this.value[key]=saved[key];
-      for (const key of ['showFps','subtitles','tutorial'] as const)
+      for (const key of ['showFps','subtitles','tutorial','autoGuide'] as const)
         if (typeof saved[key]==='boolean') this.value[key]=saved[key];
       const sensitivity=saved['sensitivity'];
       if (typeof sensitivity==='number' && sensitivity>=TUNABLES.settings.sensitivityMin && sensitivity<=TUNABLES.settings.sensitivityMax) this.value.sensitivity=sensitivity;

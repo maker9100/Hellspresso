@@ -75,10 +75,10 @@ export class Menu {
         <label class="setting"><span>그림자</span><select data-setting="shadows">${(['off','low','medium'] as const).map(v=>`<option ${s.shadows===v?'selected':''} value="${v}">${v==='off'?'끔':v==='low'?'낮음':'보통'}</option>`).join('')}</select></label>
         ${range('sensitivity','마우스 감도',s.sensitivity,TUNABLES.settings.sensitivityMin,TUNABLES.settings.sensitivityMax)}
         ${range('effectsVolume','효과음',s.effectsVolume)}${range('musicVolume','배경음악',s.musicVolume)}${range('screenShake','화면 흔들림',s.screenShake)}
-        ${toggle('showFps','FPS 표시',s.showFps)}${toggle('subtitles','자막',s.subtitles)}${toggle('tutorial','조작 안내',s.tutorial)}</div>
+        ${toggle('showFps','FPS 표시',s.showFps)}${toggle('subtitles','자막',s.subtitles)}${toggle('tutorial','조작 안내',s.tutorial)}${toggle('autoGuide','중앙역 자동 길 찾기',s.autoGuide)}</div>
         <div class="button-row">${this.button('fullscreen','전체화면')}${this.button('reset','초기화')}${this.button('back','뒤로')}</div>`;
     }else if(this.panel==='controls'){
-      body=`<h2>조작법<span>CONTROLS</span></h2><p class="subtle">터치: 왼쪽 조이스틱으로 이동, 오른쪽을 드래그해 시점 회전.<br>PC: 키를 클릭한 뒤 사용할 키를 누르세요. ESC로 변경 취소.</p><div class="bindings">${ACTIONS.map(action=>`<div><span>${LABELS[action]}</span><button data-bind="${action}">${this.capturing===action?'키 입력 대기':s.bindings[action].map(keyLabel).join(' / ')}</button></div>`).join('')}<div><span>빠른 HP 회복 / 정지</span><b>H / ESC</b></div></div><p class="subtle">좌클릭으로 장착한 무기 공격, E로 줍기, X로 추출, R로 재장전, M으로 층 지도. 터치에서는 같은 기능의 버튼을 누르세요.</p>${this.button('back','뒤로')}`;
+      body=`<h2>조작법<span>CONTROLS</span></h2><p class="subtle">터치: 왼쪽 조이스틱으로 이동, 오른쪽을 드래그해 시점 회전.<br>PC: 키를 클릭한 뒤 사용할 키를 누르세요. ESC로 변경 취소.</p><div class="bindings">${ACTIONS.map(action=>`<div><span>${LABELS[action]}</span><button data-bind="${action}">${this.capturing===action?'키 입력 대기':s.bindings[action].map(keyLabel).join(' / ')}</button></div>`).join('')}<div><span>빠른 HP 회복 / 정지</span><b>H / ESC</b></div></div><p class="subtle">좌클릭으로 장착한 무기 공격, E로 줍기·엘리베이터 이동, 엘리베이터 안에서 Q로 위층 이동, X로 추출, R로 재장전, M으로 층 지도. 터치에서는 같은 기능의 버튼을 누르세요.</p>${this.button('back','뒤로')}`;
     }else if(this.panel==='credits'){
       body=`<h2>SλVE POINT · GPT 6.1 Sol<span>CREDITS</span></h2><p>HELLSPRESSO — DEMO VERSION</p>${this.button('back','뒤로')}`;
     }else if(this.state==='MENU'){
@@ -86,7 +86,7 @@ export class Menu {
       this.root.innerHTML=`<header class="brand-line"><b>SλVE POINT</b><span>SINGLE PLAYER</span></header><div class="main-layout"><div class="title-block"><span class="eyebrow">DEAD TIRED. STILL WORKING.</span><h1>HELL<span>SPRESSO</span><i>DEMO</i></h1><p>카페인이 없는 자<br>죽음을 맞이할지어다.</p><div class="title-rule"></div><small>과로는 끝났다. 야근은 계속된다.</small></div><div class="menu-card"><div class="card-label"><span>RESUME EXISTENCE</span><i>01</i></div><h2>다시, 한 잔.</h2><p class="subtle">키보드·마우스 또는 터치로 지옥을 누빈다.<br>악마를 처치하고 정수를 추출해 카페인을 보충한다.</p>${this.button('start','새 게임 시작',true)}<button disabled>이어하기<span>기록 없음</span></button><div class="button-row">${this.button('settings','설정')}${this.button('controls','조작법')}</div>${this.button('credits','크레딧')}<div class="local-status"><i></i> 게스트 · 로컬 모드</div></div></div><footer class="menu-footer"><span>CAFFEINE IS EXISTENCE.</span><span>STAGE 01 · 지옥 사무실</span></footer>`;
       return;
     }else if(this.state==='ENDING'){
-      body=`<span class="eyebrow">STAGE 01 / CLEAR</span><h2>악마 도시 진입<span>STAGE 02</span></h2><p class="subtle">지옥 사무실을 빠져나와 악마 도시 입구에 도착했다.</p>${this.button('restart','다시 플레이',true)}${this.button('menu','메인 메뉴')}`;
+      body=`<span class="eyebrow">STAGE 03 / CLEAR</span><h2>용암 강 하류 진입<span>STAGE 04</span></h2><p class="subtle">데빌 트레인을 격파하고 용암 강 하류 입구에 도착했다.</p>${this.button('restart','다시 플레이',true)}${this.button('menu','메인 메뉴')}`;
     }else if(this.state==='DEAD'){
       const title=this.cause==='hp'?'치명상':this.cause==='both'?'HP · 카페인 동시 고갈':'카페인 고갈';
       body=`<span class="eyebrow warning">EMPLOYMENT TERMINATED</span><h2>존재 종료<span>${title}</span></h2><p class="subtle">카페인이 없는 자 죽음을 맞이할지어다.</p>${this.button('restart','새로 시작',true)}${this.button('menu','메인 메뉴')}`;
@@ -125,7 +125,7 @@ export class Menu {
     if(key==='shadows' && (el.value==='off'||el.value==='low'||el.value==='medium'))s.shadows=el.value;
     if(key==='renderScale')s.renderScale=Number(el.value);
     if(key==='sensitivity'||key==='effectsVolume'||key==='musicVolume'||key==='screenShake')s[key]=Number(el.value);
-    if((key==='showFps'||key==='subtitles'||key==='tutorial') && el instanceof HTMLInputElement)s[key]=el.checked;
+    if((key==='showFps'||key==='subtitles'||key==='tutorial'||key==='autoGuide') && el instanceof HTMLInputElement)s[key]=el.checked;
     this.store.save();this.callbacks.changed();this.render();
   };
   private readonly captureKey=(event:KeyboardEvent):void=>{
