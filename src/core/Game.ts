@@ -17,6 +17,7 @@ import { GameStateMachine } from './GameStateMachine';
 import type { GameState } from './GameStateMachine';
 import { ArenaCombat } from './ArenaCombat';
 import { Input } from './Input';
+import { Inventory } from './Inventory';
 import { TouchControls } from '../ui/TouchControls';
 import { PointerLock } from './PointerLock';
 import { NEUTRAL_INTENT } from './types';
@@ -41,6 +42,7 @@ export class Game {
   private readonly loop:FixedStepLoop;
   private readonly touch:TouchControls;
   private readonly combat:ArenaCombat;
+  private readonly inventory=new Inventory();
   private attack=false;
   private extract=false;
   private readonly touchMode=matchMedia('(pointer: coarse)').matches;
@@ -77,9 +79,12 @@ export class Game {
       else if(!locked && this.machine.current==='PLAYING')this.change('PAUSED');
     },message=>this.hud.toast(message));
     this.input=new Input(()=>this.settings.value,()=>this.pointer.locked && this.machine.current==='PLAYING');
-    this.combat=new ArenaCombat(this.scene,this.collision,message=>this.hud.toast(message),{
+    this.combat=new ArenaCombat(this.scene,this.collision,message=>{
+      if(this.machine.current==='INVENTORY')this.menu.inventoryNotice(message);
+      else this.hud.toast(message);
+    },{
       spawn:officePlan.enemySpawn, chaseLimitZ:officePlan.stairZ, model:createOfficeDemon(),
-    });
+    },this.inventory);
     this.renderer.domElement.addEventListener('pointerdown',event=>{
       if(event.button===0 && this.pointer.locked && this.machine.current==='PLAYING')this.attack=true;
     },{signal:this.events.signal});
@@ -89,7 +94,15 @@ export class Game {
       if(action==='extract'){this.extract=true;return;}
       this.change(action==='pause'?'PAUSED':'INVENTORY');
     });
-    this.menu=new Menu(parent,this.settings,{start:()=>this.start(),skipOpening:()=>this.beginEscape(),resume:()=>this.resume(),menu:()=>this.change('MENU'),changed:()=>this.applySettings(),toast:message=>this.hud.toast(message)});
+    this.menu=new Menu(parent,this.settings,this.inventory,{
+      start:()=>this.start(),
+      skipOpening:()=>this.beginEscape(),
+      resume:()=>this.resume(),
+      menu:()=>this.change('MENU'),
+      changed:()=>this.applySettings(),
+      toast:message=>this.hud.toast(message),
+      extract:()=>{ if(this.machine.current==='INVENTORY')this.extract=true; },
+    });
     this.loop=new FixedStepLoop(dt=>this.update(dt),delta=>this.render(delta));
     document.addEventListener('keydown',this.keydown,{signal:this.events.signal});
     const preventBrowserGesture = (event:Event):void => {
@@ -175,9 +188,8 @@ export class Game {
     const before=this.resources.current.caffeine;
     this.resources.advance(dt,false);
     this.caffeineSpent+=before-this.resources.current.caffeine;
-    const playing=this.machine.current==='PLAYING';
     if(!this.resources.cause)this.combat.update(dt,this.movement.position,this.movement.eyeHeight,
-      this.yaw,this.pitch,playing,this.attack,this.extract,this.resources);
+      this.yaw,this.pitch,this.machine.simulating,this.attack,this.extract,this.resources);
     this.attack=false;this.extract=false;
     this.elapsed+=dt;this.resolveDeath();
     if(this.machine.current==='PLAYING' && officePlan.reachedLanding(this.movement.position))this.change('ENDING');
@@ -185,7 +197,7 @@ export class Game {
 
   private resolveDeath():void{if(this.resources.cause && this.machine.current!=='DEAD' && (this.machine.simulating||this.machine.current==='PAUSED'))this.change('DEAD');}
 
-  private snapshot(){return {state:this.machine.current,cause:this.resources.cause,resources:this.resources.current,position:{...this.movement.position},height:this.movement.height,grounded:this.movement.grounded,jumps:this.movement.jumps,mode:this.movement.mode,onStairs:this.movement.position.z<officePlan.stairZ,yaw:this.yaw,pitch:this.pitch,elapsed:this.elapsed,caffeineSpent:this.caffeineSpent,fps:this.fps};}
+  private snapshot(){return {state:this.machine.current,cause:this.resources.cause,resources:this.resources.current,position:{...this.movement.position},height:this.movement.height,grounded:this.movement.grounded,jumps:this.movement.jumps,mode:this.movement.mode,cutterEquipped:this.inventory.isEquipped('cutter'),onStairs:this.movement.position.z<officePlan.stairZ,yaw:this.yaw,pitch:this.pitch,elapsed:this.elapsed,caffeineSpent:this.caffeineSpent,fps:this.fps};}
 
   private resize():void{
     const width=this.parent.clientWidth,height=this.parent.clientHeight;
@@ -243,13 +255,15 @@ export class Game {
       }
       this.camera.rotation.set(this.pitch,this.yaw,0,'YXZ');
       const p=this.movement.position;this.camera.position.set(p.x,p.y+this.movement.eyeHeight,p.z);
-      this.cutter.visible=this.machine.current!=='DEAD' && this.machine.current!=='ENDING';
+      this.cutter.visible=this.inventory.isEquipped('cutter') && this.machine.current!=='DEAD' && this.machine.current!=='ENDING';
       const c=TUNABLES.prototype.cutterModel;
       const swing=this.combat.cutterSwing;
       this.cutter.rotation.z=c.rotation[2]+swing*0.96;
       this.cutter.position.y=c.position[1]+Math.sin(this.elapsed*c.bobFrequency)*c.bobAmplitude*this.settings.value.screenShake+swing*0.042;
     }
-    this.hud.update(this.snapshot(),this.settings.value);
+    const snapshot=this.snapshot();
+    this.hud.update(snapshot,this.settings.value);
+    this.menu.updateInventory(snapshot.resources.caffeine);
     this.renderer.render(this.scene,this.camera);
   }
 
