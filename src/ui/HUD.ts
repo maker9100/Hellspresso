@@ -6,7 +6,7 @@ import type { Settings } from './Settings';
 import { keyLabel } from './Settings';
 
 export interface HudSnapshot {
-  state:GameState; resources:Readonly<Resources>; mode:string; elapsed:number; caffeineSpent:number; fps:number;
+  state:GameState; resources:Readonly<Resources>; mode:string; onStairs:boolean; elapsed:number; caffeineSpent:number; fps:number;
 }
 
 export class HUD {
@@ -21,10 +21,11 @@ export class HUD {
   private readonly fps:HTMLElement;
   private readonly hints:HTMLElement;
   private readonly message:HTMLElement;
+  private readonly route:HTMLElement;
   private toastUntil=0;
   constructor(parent:HTMLElement,debug:boolean){
     this.root.className='hud';
-    this.root.innerHTML=`<div class="hud-top"><div class="location"><span class="eyebrow">HELLSPRESSO / LOCAL</span><b>꺼지지 않는 야근</b><small>이동 테스트 구역</small></div><div class="run-clock" id="run-clock">00:00</div></div>
+    this.root.innerHTML=`<div class="hud-top"><div class="location"><span class="eyebrow">HELLSPRESSO / STAGE 01</span><b>지옥 사무실</b><small id="office-route"></small></div><div class="run-clock" id="run-clock">00:00</div></div>
       <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
       <div class="vitals"><div class="vital hp"><div><b>HP</b><span id="hp-value"></span></div><div class="track"><i id="hp-fill"></i></div></div>
       <div class="vital caf"><div><b>CAF <small>EXISTENCE FUEL</small></b><span id="caf-value"></span></div><div class="track"><i id="caf-fill"></i></div></div>
@@ -37,13 +38,15 @@ export class HUD {
     const get=(id:string):HTMLElement=>{const e=this.root.querySelector<HTMLElement>(id);if(!e)throw new Error(id);return e;};
     this.hp=get('#hp-value');this.caf=get('#caf-value');this.stamina=get('#stamina-value');
     this.hpFill=get('#hp-fill');this.cafFill=get('#caf-fill');this.staminaFill=get('#stamina-fill');
-    this.debug=get('#debug-output');this.fps=get('#fps-output');this.hints=get('#hints');
+    this.debug=get('#debug-output');this.fps=get('#fps-output');this.hints=get('#hints');this.route=get('#office-route');
     this.message=document.createElement('div');this.message.className='toast';this.message.setAttribute('role','status');this.message.hidden=true;parent.append(this.message);
   }
   toast(message:string):void{this.message.textContent=message;this.toastUntil=performance.now()+TUNABLES.prototype.uiToastSeconds*1000;}
   update(snapshot:HudSnapshot,settings:Settings):void{
     const {resources:r,state}=snapshot;
-    this.root.hidden=state==='MENU'||state==='LOADING';
+    this.root.hidden=state==='MENU'||state==='LOADING'||state==='INTRO'||state==='ENDING';
+    const route=snapshot.onStairs?'비상계단 · 상층 입구로 하강':'최상층 · 오른쪽 끝 비상계단으로';
+    if(this.route.textContent!==route)this.route.textContent=route;
     this.root.classList.toggle('danger',r.caffeine<=TUNABLES.debug.caffeineWarning&&state!=='DEAD');
     this.root.classList.toggle('aiming',state==='PLAYING');
     this.hp.textContent=`${r.hp.toFixed(0)} / ${RULES.resources.hpMax}`;

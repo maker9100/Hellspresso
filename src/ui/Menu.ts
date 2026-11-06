@@ -4,7 +4,7 @@ import { ACTIONS, keyLabel, rebind, SettingsStore } from './Settings';
 import type { Action } from './Settings';
 import { TUNABLES } from '../config/tunables';
 
-interface Callbacks { start:()=>void; resume:()=>void; menu:()=>void; changed:()=>void; toast:(text:string)=>void }
+interface Callbacks { start:()=>void; skipOpening:()=>void; resume:()=>void; menu:()=>void; changed:()=>void; toast:(text:string)=>void }
 const LABELS:Record<Action,string>={forward:'앞으로',backward:'뒤로',left:'왼쪽',right:'오른쪽',sprint:'달리기',jump:'점프 / 2단 점프',dash:'대시',slide:'슬라이딩',interact:'상호작용',extractor:'정수 추출기',reload:'재장전',inventory:'인벤토리'};
 
 export class Menu {
@@ -14,6 +14,7 @@ export class Menu {
   private readonly events=new AbortController();
   private capturing:Action|null=null;
   private cause:DeathCause|null=null;
+  private openingBeat=-1;
   constructor(parent:HTMLElement,private readonly store:SettingsStore,private readonly callbacks:Callbacks){
     this.root.className='overlay';parent.append(this.root);
     this.root.addEventListener('click',this.click,{signal:this.events.signal});
@@ -22,10 +23,32 @@ export class Menu {
     this.render();
   }
   show(state:GameState,cause:DeathCause|null):void{this.state=state;this.cause=cause;this.panel='home';this.capturing=null;this.render();}
+  setOpeningBeat(beat:number,subtitles:boolean):void{
+    if(beat===this.openingBeat||this.state!=='INTRO')return;
+    this.openingBeat=beat;
+    const caption=this.root.querySelector<HTMLElement>('[data-opening-caption]');
+    const button=this.root.querySelector<HTMLButtonElement>('[data-action="skip-opening"]');
+    if(caption){
+      caption.hidden=!subtitles;
+      caption.textContent=[
+        '악마가 강동원의 정수를 추출하려 한다.',
+        '강동원은 악마를 책상 모서리에 내리찍는다.',
+        '정신을 차려라. 비상계단은 사무실 오른쪽 끝이다.',
+      ][beat]??'';
+    }
+    if(button)button.textContent=beat===2?'탈출 시작':'오프닝 건너뛰기';
+  }
   private button(action:string,label:string,primary=false):string{return `<button data-action="${action}" class="${primary?'primary':''}">${label}<span aria-hidden="true">↗</span></button>`;}
   private render():void{
     this.root.hidden=this.state==='PLAYING'||this.state==='LOADING';
     if(this.root.hidden)return;
+    this.root.classList.toggle('opening-overlay',this.state==='INTRO');
+    if(this.state==='INTRO'){
+      this.root.classList.remove('main-menu');
+      this.openingBeat=-1;
+      this.root.innerHTML=`<div class="opening-copy"><span class="eyebrow">STAGE 01 · INFERNAL OFFICE</span><h2>지옥 사무실</h2><p data-opening-caption aria-live="polite"></p></div><button data-action="skip-opening">오프닝 건너뛰기</button>`;
+      return;
+    }
     const s=this.store.value;
     let body='';
     if(this.panel==='settings'){
@@ -44,10 +67,12 @@ export class Menu {
       body=`<h2>SλVE POINT · GPT 6.1 Sol<span>CREDITS</span></h2><p>HELLSPRESSO — DEMO VERSION</p>${this.button('back','뒤로')}`;
     }else if(this.state==='MENU'){
       this.root.classList.add('main-menu');
-      this.root.innerHTML=`<header class="brand-line"><b>SλVE POINT</b><span>SINGLE PLAYER</span></header><div class="main-layout"><div class="title-block"><span class="eyebrow">DEAD TIRED. STILL WORKING.</span><h1>HELL<span>SPRESSO</span><i>DEMO</i></h1><p>카페인이 없는 자<br>죽음을 맞이할지어다.</p><div class="title-rule"></div><small>과로는 끝났다. 야근은 계속된다.</small></div><div class="menu-card"><div class="card-label"><span>RESUME EXISTENCE</span><i>01</i></div><h2>다시, 한 잔.</h2><p class="subtle">키보드·마우스 또는 터치로 지옥을 누빈다.<br>악마를 처치하고 정수를 추출해 카페인을 보충한다.</p>${this.button('start','새 게임 시작',true)}<button disabled>이어하기<span>기록 없음</span></button><div class="button-row">${this.button('settings','설정')}${this.button('controls','조작법')}</div>${this.button('credits','크레딧')}<div class="local-status"><i></i> 게스트 · 로컬 모드</div></div></div><footer class="menu-footer"><span>CAFFEINE IS EXISTENCE.</span><span>전투 데모</span></footer>`;
+      this.root.innerHTML=`<header class="brand-line"><b>SλVE POINT</b><span>SINGLE PLAYER</span></header><div class="main-layout"><div class="title-block"><span class="eyebrow">DEAD TIRED. STILL WORKING.</span><h1>HELL<span>SPRESSO</span><i>DEMO</i></h1><p>카페인이 없는 자<br>죽음을 맞이할지어다.</p><div class="title-rule"></div><small>과로는 끝났다. 야근은 계속된다.</small></div><div class="menu-card"><div class="card-label"><span>RESUME EXISTENCE</span><i>01</i></div><h2>다시, 한 잔.</h2><p class="subtle">키보드·마우스 또는 터치로 지옥을 누빈다.<br>악마를 처치하고 정수를 추출해 카페인을 보충한다.</p>${this.button('start','새 게임 시작',true)}<button disabled>이어하기<span>기록 없음</span></button><div class="button-row">${this.button('settings','설정')}${this.button('controls','조작법')}</div>${this.button('credits','크레딧')}<div class="local-status"><i></i> 게스트 · 로컬 모드</div></div></div><footer class="menu-footer"><span>CAFFEINE IS EXISTENCE.</span><span>STAGE 01 · 최상층</span></footer>`;
       return;
     }else if(this.state==='INVENTORY'){
       body=`<span class="eyebrow warning">CAFFEINE IS STILL DRAINING</span><h2>소지품<span>INVENTORY</span></h2><div class="inventory-item"><b>01 커터칼</b><span>기본 장비</span></div><div class="inventory-item"><b>정수 추출기</b><span>생존 도구</span></div><div class="empty-inventory">악마에게서 얻은 정수는 게임 화면에서 추출할 수 있다.</div><p class="warning">이 화면에서도 시간이 흐른다.</p>${this.button('resume','게임으로 돌아가기',true)}`;
+    }else if(this.state==='ENDING'){
+      body=`<span class="eyebrow">STAGE 01 / 05F → 04F</span><h2>최상층 통과<span>LANDING REACHED</span></h2><p class="subtle">비상계단을 내려와 상층 사무실 입구에 도착했다.<br>이 구간의 플레이는 여기까지다.</p>${this.button('restart','다시 플레이',true)}${this.button('menu','메인 메뉴')}`;
     }else if(this.state==='DEAD'){
       const title=this.cause==='hp'?'치명상':this.cause==='both'?'HP · 카페인 동시 고갈':'카페인 고갈';
       body=`<span class="eyebrow warning">EMPLOYMENT TERMINATED</span><h2>존재 종료<span>${title}</span></h2><p class="subtle">카페인이 없는 자 죽음을 맞이할지어다.</p>${this.button('restart','새로 시작',true)}${this.button('menu','메인 메뉴')}`;
@@ -64,6 +89,7 @@ export class Menu {
     if(binding && ACTIONS.includes(binding as Action)){this.capturing=binding as Action;this.render();return;}
     switch(target.dataset['action']){
       case'start':this.callbacks.start();break;
+      case'skip-opening':this.callbacks.skipOpening();break;
       case'restart':this.callbacks.menu();this.callbacks.start();break;
       case'resume':this.callbacks.resume();break;
       case'menu':this.callbacks.menu();break;
