@@ -7,7 +7,7 @@ import { RECIPES } from '../src/core/items';
 import { CollisionWorld } from '../src/physics/CollisionWorld';
 import { ResourceSystem } from '../src/player/Resources';
 
-test.each([[0,1],[.9999,7]])('demon drops essence in the configured range (%s)', (roll,count) => {
+test.each([[0,1],[.9999,7]])('demon automatically stores essence in the configured range (%s)', (roll,count) => {
   const resources = new ResourceSystem();
   const inventory = new Inventory();
   const drop = vi.fn();
@@ -15,9 +15,9 @@ test.each([[0,1],[.9999,7]])('demon drops essence in the configured range (%s)',
   const arena = new ArenaCombat(new Scene(),new CollisionWorld([]),()=>{}, {spawn:{x:0,y:0,z:13},drop},inventory);
   try {
     for(const dt of [.01,.36,.36])arena.update(dt,{x:0,y:0,z:14.5},1.65,0,0,true,{attack:true},resources);
-    expect(drop).toHaveBeenCalledWith('essence',count,expect.anything());
+    expect(drop).not.toHaveBeenCalledWith('essence',expect.anything(),expect.anything());
     expect(drop).toHaveBeenCalledWith('heart',1,expect.anything());
-    expect(inventory.essence).toBe(0);
+    expect(inventory.essence).toBe(count);
     expect(resources.current.caffeine).toBe(100);
   } finally {
     random.mockRestore();
