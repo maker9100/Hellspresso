@@ -1,3 +1,4 @@
+import { addCampaignWorld } from './campaignWorld';
 import {
   BoxGeometry, BufferGeometry, CylinderGeometry, Float32BufferAttribute, Group, Mesh,
   MeshBasicMaterial, PlaneGeometry, Quaternion, Vector3,
@@ -288,14 +289,15 @@ export function createOffice() {
     root.add(mesh);
   }
 
+  const campaign=addCampaignWorld(root,colliders);
   const animateRoute=addOfficeRoute(root,colliders);
   const openingDemon=createOfficeDemon();
   openingDemon.visible=false;
   root.add(openingDemon);
   return {
-    root,colliders,openingDemon,spawn:officePlan.spawn,
+    root,colliders,openingDemon,campaign,spawn:officePlan.spawn,
     animate(seconds:number):void{
-      animateRoute(seconds);
+      animateRoute(seconds);campaign.animate(seconds);
       for(const pulse of pulses){
         const t=(seconds*0.63+pulse.phase)%1;
         pulse.mesh.position.z=pulse.start+(pulse.end-pulse.start)*t;
