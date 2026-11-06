@@ -70,7 +70,7 @@ export const TUNABLES = {
   spawning: { globalCap: 18, areaCap: 6, intervalSeconds: 10, batchSize: 1, minimumPlayerDistance: 8 }, // TBD: 기획 미확정
   ai: { nearbyHz: 10, distantHz: 2, detectionRange: 28, navigationCellSize: 1 }, // TBD: 기획 미확정
   drops: {
-    essencePerKill: 300, heartsPerKill: 1, // TBD: 기획 미확정
+    essenceMin: 1, essenceMax: 7, heartsPerKill: 1, // TBD: 기획 미확정
     healingProbabilities: { coffeeCandy: 0.1, espresso: 0.06, latte: 0.04, coffeeVodka: 0.02 }, // TBD: 기획 미확정
     craftingProbabilities: { cutterBlade: 0.4, mechanicalPencil: 0.15, leadTube: 0.12 }, // TBD: 기획 미확정
     ammoBundle: { staples: 24, shavings: 40, pencilLeads: 40, sniperStaples: 2 }, // TBD: 기획 미확정
